@@ -25,6 +25,11 @@ export type MatchStateDTO = {
   teams: TeamDTO[];
   attack_stats: AttackStatDTO[];
   panels: Record<string, boolean>;
+  countdown_end_ts?: number;
+  countdown_broadcast_msg?: string;
+  countdown_toggle_panel_id?: string;
+  countdown_toggle_visible?: boolean;
+  countdown_triggered?: boolean;
   screen_title?: string;
   screen_organizer?: string;
   screen_supporter?: string;

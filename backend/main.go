@@ -13,8 +13,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 
-	httpserver "redblue-server/internal/http"
 	"redblue-server/internal/db"
+	httpserver "redblue-server/internal/http"
 	"redblue-server/internal/match"
 	"redblue-server/internal/ws"
 )
@@ -151,7 +151,7 @@ func main() {
 	}
 
 	hub := ws.NewHub()
-	matcher := match.NewService(store)
+	matcher := match.NewService(store, hub)
 
 	uploadDir := filepath.Join(filepath.Dir(dbPath), "uploads")
 	if v := os.Getenv("RED_BLUE_UPLOAD_DIR"); strings.TrimSpace(v) != "" {
@@ -160,7 +160,6 @@ func main() {
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
 		log.Fatalf("create uploads dir: %v", err)
 	}
-	log.Printf("📁 得分总榜等上传目录: %s", uploadDir)
 
 	srv := httpserver.NewServer(store, matcher, hub, uploadDir)
 
@@ -169,7 +168,7 @@ func main() {
 		port = "8080"
 	}
 	addr := ":" + port
-	log.Printf("🚀 红蓝对抗态势感知后端已启动: http://0.0.0.0%s", addr)
+	log.Printf("红蓝对抗态势感知后端已启动: http://0.0.0.0%s", addr)
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}

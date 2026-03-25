@@ -13,13 +13,10 @@
           <div class="admin-login-brand-tags">
             <span class="login-tag">WebSocket 实时联动</span>
             <span class="login-tag">攻防演练指挥</span>
-            <span class="login-tag">事件可追溯回放</span>
             <span class="login-tag">Glassmorphism UI</span>
           </div>
           <ul class="login-feature-list">
-            <li>细粒度模块导航：对抗演练 / 大屏视觉 / 广播回放 / 数据维护</li>
-            <li>统一配色与卡片系统：登录、顶部栏、侧边导航视觉一致</li>
-            <li>重点操作突出：创建场次、推送指令、全库重置风险隔离</li>
+            <li>网络安全为人民，网络安全靠人民。</li>
           </ul>
           <div class="login-slogan-rotator">
             <span class="rotator-label">NOW SHOWING</span>
@@ -72,6 +69,10 @@
         <div>
           <div class="admin-title font-cyber">红蓝对抗指挥中心 · Admin Workspace</div>
           <div class="admin-subtitle">Inspired by CareerCompass login/dashboard visual language</div>
+        </div>
+        <div class="net-indicator" :class="networkOnline ? 'ok' : 'bad'">
+          <span class="dot"></span>
+          <span>{{ networkOnline ? "网络在线" : "网络断开" }}</span>
         </div>
       </div>
 
@@ -155,19 +156,6 @@
             </div>
           </button>
 
-          <button
-            type="button"
-            class="nav-card nav-card-warn"
-            :class="{ active: activeSection === 'maintenance' }"
-            @click="activeSection = 'maintenance'"
-          >
-            <span class="nav-card-ico" aria-hidden="true">MT</span>
-            <div class="nav-card-body">
-              <div class="nav-card-title">数据维护</div>
-              <div class="nav-card-desc">重置场次或全库</div>
-            </div>
-          </button>
-
           <div class="sidebar-divider" role="presentation"></div>
 
           <button
@@ -195,6 +183,20 @@
               <div class="nav-card-desc">模板、工单、KPI与审计</div>
             </div>
           </button>
+
+          <button
+            type="button"
+            class="nav-card nav-card-warn"
+            :class="{ active: activeSection === 'maintenance' }"
+            @click="activeSection = 'maintenance'"
+          >
+            <span class="nav-card-ico" aria-hidden="true">MT</span>
+            <div class="nav-card-body">
+              <div class="nav-card-title">数据维护</div>
+              <div class="nav-card-desc">重置场次或全库</div>
+            </div>
+          </button>
+
         </aside>
 
         <main class="admin-main">
@@ -491,6 +493,36 @@
               </el-button>
 
               <div style="height: 14px"></div>
+              <div class="row-between mb12">
+                <div>比赛倒计时截止时间</div>
+                <input v-model="countdownPicker" type="datetime-local" style="width: 280px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--el-border-color);" />
+              </div>
+
+              <div class="row-between mb12">
+                <div>倒计时到点触发广播内容</div>
+                <el-input v-model="countdownBroadcastMsg" type="textarea" :rows="3" style="width: 280px" placeholder="留空则不广播（到点后自动触发系统通知）" />
+              </div>
+
+              <div class="row-between mb12">
+                <div>倒计时到点触发切换面板ID</div>
+                <el-input v-model="countdownTogglePanelID" size="small" style="width: 280px" placeholder="留空则不切换（例如：panel-leaderboard）" />
+              </div>
+              <div class="row-between mb12">
+                <div>切换面板可见</div>
+                <el-switch v-model="countdownTogglePanelVisible" />
+              </div>
+
+              <el-button
+                type="primary"
+                class="w-full"
+                :disabled="!matchId"
+                :loading="isSubmitting"
+                @click="saveCountdown"
+              >
+                保存倒计时
+              </el-button>
+
+              <div style="height: 14px"></div>
 
               <div class="mb8" style="font-size: 13px; color: var(--el-text-color-secondary)">音频控制（本场次）</div>
               <div class="row-between mb12">
@@ -776,6 +808,11 @@
                   <div class="col"><el-input v-model="templateForm.map_type" placeholder="地图模式" /></div>
                   <div class="col"><el-input v-model="templateForm.attack_types_csv" placeholder="战术类型(逗号分隔)" /></div>
                 </div>
+                <div class="attack-custom-tags" style="margin-bottom: 10px">
+                  <el-tag class="tag" style="cursor: pointer" @click="applyTemplatePreset('web-ops')">场景：Web攻防实战</el-tag>
+                  <el-tag class="tag" style="cursor: pointer" @click="applyTemplatePreset('trace-blue')">场景：蓝队溯源防守</el-tag>
+                  <el-tag class="tag" style="cursor: pointer" @click="applyTemplatePreset('city-cluster')">场景：地市集群联防</el-tag>
+                </div>
                 <el-button type="primary" @click="saveTemplate" :loading="isSubmitting">保存模板</el-button>
                 <div style="height: 12px" />
                 <el-table :data="templates" height="220">
@@ -788,7 +825,7 @@
               <el-card shadow="hover" class="card">
                 <template #header>
                   <div class="row-between">
-                    <div class="card-title">任务工单与回放书签</div>
+                    <div class="card-title">任务流与回放书签</div>
                     <el-button size="small" :disabled="!matchId" @click="loadTasks">刷新</el-button>
                   </div>
                 </template>
@@ -806,12 +843,19 @@
                     </el-select>
                   </div>
                 </div>
-                <el-button type="primary" :disabled="!matchId" @click="createTask">创建工单</el-button>
+                <el-button type="primary" :disabled="!matchId" @click="createTask">创建自定义任务</el-button>
                 <div style="height: 12px" />
-                <el-table :data="tasks" height="150">
+                <el-table :data="taskFlowRows" height="180">
+                  <el-table-column prop="flow_type" label="任务流类型" min-width="130" />
                   <el-table-column prop="title" label="任务" min-width="140" />
                   <el-table-column prop="status" label="状态" width="100" />
-                  <el-table-column prop="assignee" label="负责人" width="120" />
+                  <el-table-column prop="assignee" label="负责人" width="110" />
+                  <el-table-column label="流转" width="180">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="updateTaskStatus(row.id, 'doing')">处理中</el-button>
+                      <el-button size="small" type="success" @click="updateTaskStatus(row.id, 'done')">完成</el-button>
+                    </template>
+                  </el-table-column>
                 </el-table>
                 <el-divider />
                 <div class="row mb12">
@@ -829,12 +873,20 @@
                     <el-button size="small" :disabled="!matchId" @click="loadKpi">刷新</el-button>
                   </div>
                 </template>
+                <div class="row mb12">
+                  <el-select v-model="analyticsChartType" style="width: 220px">
+                    <el-option label="战术柱状图" value="bar" />
+                    <el-option label="状态饼图" value="pie" />
+                    <el-option label="高频战术树图" value="treemap" />
+                  </el-select>
+                </div>
                 <div class="row">
                   <div class="col"><div class="label">总事件数</div><div class="score">{{ kpi.total_events ?? 0 }}</div></div>
                   <div class="col"><div class="label">有效攻击率</div><div class="score">{{ formatRate(kpi.effective_attack_rate) }}</div></div>
                   <div class="col"><div class="label">溯源成功率</div><div class="score">{{ formatRate(kpi.trace_success_rate) }}</div></div>
                   <div class="col"><div class="label">净分差</div><div class="score">{{ kpi.net_score_diff ?? 0 }}</div></div>
                 </div>
+                <div ref="analyticsChartEl" style="height: 240px; margin-top: 10px"></div>
                 <div style="height: 12px" />
                 <el-table :data="trendRows" height="180">
                   <el-table-column prop="dimension" label="维度" min-width="100" />
@@ -846,7 +898,13 @@
                 <template #header>
                   <div class="row-between">
                     <div class="card-title">复盘报告与审计日志</div>
-                    <el-button size="small" :disabled="!matchId" @click="loadAuditLogs">刷新</el-button>
+                    <el-button
+                      size="small"
+                      :disabled="auditScope === 'match' && !matchId"
+                      @click="loadAuditLogs"
+                    >
+                      刷新
+                    </el-button>
                   </div>
                 </template>
                 <div class="row mb12">
@@ -859,124 +917,32 @@
                 </div>
                 <div class="mono" style="margin-top: 10px; max-height: 160px; overflow: auto; white-space: pre-wrap;">{{ reportMarkdown }}</div>
                 <el-divider />
+                <div class="row mb12">
+                  <el-radio-group v-model="auditScope" size="small">
+                    <el-radio-button label="match">本场次</el-radio-button>
+                    <el-radio-button label="global">全局</el-radio-button>
+                  </el-radio-group>
+                </div>
+                <div class="row mb12">
+                  <el-input v-model="auditFilter.actor" placeholder="按操作人筛选" clearable />
+                  <el-input v-model="auditFilter.module" placeholder="按模块筛选" clearable />
+                </div>
+                <div class="row mb12">
+                  <input v-model="auditFromPicker" type="datetime-local" style="width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--el-border-color);" />
+                  <input v-model="auditToPicker" type="datetime-local" style="width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--el-border-color);" />
+                </div>
                 <el-table :data="auditLogs" height="180">
+                  <el-table-column prop="match_id" label="关联ID" min-width="160" />
                   <el-table-column prop="actor" label="操作人" width="110" />
+                  <el-table-column prop="role" label="角色" width="90" />
                   <el-table-column prop="module" label="模块" width="110" />
                   <el-table-column prop="action" label="动作" min-width="120" />
                   <el-table-column prop="created_at" label="时间" min-width="120" />
-                </el-table>
-              </el-card>
-            </div>
-          </div>
-
-          <div v-show="activeSection === 'ops'" class="admin-section">
-            <div class="section-header">
-              <h2 class="section-title">运营与分析</h2>
-              <p class="section-sub">场次模板、任务工单、回放书签、KPI 指标与审计日志。</p>
-            </div>
-            <div class="grid">
-              <el-card shadow="hover" class="card">
-                <template #header>
-                  <div class="row-between">
-                    <div class="card-title">场次模板系统</div>
-                    <el-button size="small" @click="loadTemplates">刷新</el-button>
-                  </div>
-                </template>
-                <div class="row mb12">
-                  <div class="col"><el-input v-model="templateForm.name" placeholder="模板名称" /></div>
-                  <div class="col"><el-input v-model="templateForm.id" placeholder="模板ID(可选)" /></div>
-                </div>
-                <div class="row mb12">
-                  <div class="col"><el-input v-model="templateForm.map_type" placeholder="地图模式" /></div>
-                  <div class="col"><el-input v-model="templateForm.attack_types_csv" placeholder="战术类型(逗号分隔)" /></div>
-                </div>
-                <el-button type="primary" @click="saveTemplate" :loading="isSubmitting">保存模板</el-button>
-                <div style="height: 12px" />
-                <el-table :data="templates" height="220">
-                  <el-table-column prop="id" label="模板ID" min-width="120" />
-                  <el-table-column prop="name" label="名称" min-width="120" />
-                  <el-table-column prop="version" label="版本" width="80" />
-                  <el-table-column prop="map_type" label="地图" width="100" />
-                </el-table>
-              </el-card>
-              <el-card shadow="hover" class="card">
-                <template #header>
-                  <div class="row-between">
-                    <div class="card-title">任务工单与回放书签</div>
-                    <el-button size="small" :disabled="!matchId" @click="loadTasks">刷新</el-button>
-                  </div>
-                </template>
-                <div class="row mb12">
-                  <div class="col"><el-input v-model="taskForm.title" placeholder="任务标题" /></div>
-                  <div class="col"><el-input v-model="taskForm.assignee" placeholder="负责人" /></div>
-                </div>
-                <div class="row mb12">
-                  <div class="col"><el-input v-model="taskForm.category" placeholder="分类" /></div>
-                  <div class="col">
-                    <el-select v-model="taskForm.status" style="width: 100%">
-                      <el-option label="待处理" value="todo" />
-                      <el-option label="处理中" value="doing" />
-                      <el-option label="已完成" value="done" />
-                    </el-select>
-                  </div>
-                </div>
-                <el-button type="primary" :disabled="!matchId" @click="createTask">创建工单</el-button>
-                <div style="height: 12px" />
-                <el-table :data="tasks" height="150">
-                  <el-table-column prop="title" label="任务" min-width="140" />
-                  <el-table-column prop="status" label="状态" width="100" />
-                  <el-table-column prop="assignee" label="负责人" width="120" />
-                </el-table>
-                <el-divider />
-                <div class="row mb12">
-                  <div class="col"><el-input-number v-model="bookmarkForm.seq" :min="1" style="width: 100%" /></div>
-                  <div class="col"><el-input v-model="bookmarkForm.title" placeholder="书签标题" /></div>
-                </div>
-                <el-button :disabled="!matchId" @click="createBookmark">保存书签</el-button>
-              </el-card>
-            </div>
-            <div class="grid">
-              <el-card shadow="hover" class="card">
-                <template #header>
-                  <div class="row-between">
-                    <div class="card-title">KPI 与趋势</div>
-                    <el-button size="small" :disabled="!matchId" @click="loadKpi">刷新</el-button>
-                  </div>
-                </template>
-                <div class="row">
-                  <div class="col"><div class="label">总事件数</div><div class="score">{{ kpi.total_events ?? 0 }}</div></div>
-                  <div class="col"><div class="label">有效攻击率</div><div class="score">{{ formatRate(kpi.effective_attack_rate) }}</div></div>
-                  <div class="col"><div class="label">溯源成功率</div><div class="score">{{ formatRate(kpi.trace_success_rate) }}</div></div>
-                  <div class="col"><div class="label">净分差</div><div class="score">{{ kpi.net_score_diff ?? 0 }}</div></div>
-                </div>
-                <div style="height: 12px" />
-                <el-table :data="trendRows" height="180">
-                  <el-table-column prop="dimension" label="维度" min-width="100" />
-                  <el-table-column prop="key" label="项" min-width="120" />
-                  <el-table-column prop="value" label="数值" min-width="120" />
-                </el-table>
-              </el-card>
-              <el-card shadow="hover" class="card">
-                <template #header>
-                  <div class="row-between">
-                    <div class="card-title">复盘报告与审计日志</div>
-                    <el-button size="small" :disabled="!matchId" @click="loadAuditLogs">刷新</el-button>
-                  </div>
-                </template>
-                <div class="row mb12">
-                  <el-select v-model="reportMode" style="width: 180px">
-                    <el-option label="领导简版" value="leader" />
-                    <el-option label="技术详版" value="tech" />
-                  </el-select>
-                  <el-button type="primary" :disabled="!matchId" @click="generateReport">生成 Markdown 报告</el-button>
-                </div>
-                <div class="mono" style="margin-top: 10px; max-height: 160px; overflow: auto; white-space: pre-wrap;">{{ reportMarkdown }}</div>
-                <el-divider />
-                <el-table :data="auditLogs" height="180">
-                  <el-table-column prop="actor" label="操作人" width="110" />
-                  <el-table-column prop="module" label="模块" width="110" />
-                  <el-table-column prop="action" label="动作" min-width="120" />
-                  <el-table-column prop="created_at" label="时间" min-width="120" />
+                  <el-table-column label="详情" width="110">
+                    <template #default="{ row }">
+                      <el-button size="small" @click="openAuditDetail(row)">查看</el-button>
+                    </template>
+                  </el-table-column>
                 </el-table>
               </el-card>
             </div>
@@ -1017,6 +983,49 @@
               <el-button type="primary" @click="saveTeam">确定并同步</el-button>
             </template>
           </el-dialog>
+
+          <el-dialog v-model="auditDetailDialogVisible" title="审计详情（before/after diff）" width="860px">
+            <div class="row mb12">
+              <div class="col">
+                <div class="label">关联ID</div>
+                <div class="mono">{{ auditDetail?.match_id ?? "-" }}</div>
+              </div>
+              <div class="col">
+                <div class="label">时间</div>
+                <div class="mono">{{ auditDetail ? auditDetail.created_at : "-" }}</div>
+              </div>
+            </div>
+            <div class="row mb12">
+              <div class="col">
+                <div class="label">操作者 / 角色</div>
+                <div class="mono">
+                  {{ auditDetail?.actor ?? "-" }} / {{ auditDetail?.role ?? "-" }}
+                </div>
+              </div>
+              <div class="col">
+                <div class="label">模块 / 动作</div>
+                <div class="mono">
+                  {{ auditDetail?.module ?? "-" }} / {{ auditDetail?.action ?? "-" }}
+                </div>
+              </div>
+            </div>
+
+            <el-divider />
+
+            <div class="row mb12">
+              <div class="col">
+                <div class="label">Before</div>
+                <pre class="mono audit-pre">{{ auditBeforePretty }}</pre>
+              </div>
+              <div class="col">
+                <div class="label">After</div>
+                <pre class="mono audit-pre">{{ auditAfterPretty }}</pre>
+              </div>
+            </div>
+
+            <div class="label">Diff（变更字段）</div>
+            <pre class="mono audit-pre">{{ auditDiffText }}</pre>
+          </el-dialog>
         </main>
       </div>
     </div>
@@ -1028,13 +1037,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import axios from "axios";
+import * as echarts from "echarts";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { UploadRequestOptions } from "element-plus";
 import type { TeamDTO } from "../shared/types";
 
 // @ts-expect-error: Vetur may not infer correct TS module settings for import.meta
 const deployMode = String((import.meta as any).env?.VITE_DEPLOY_MODE ?? "proxy").trim().toLowerCase();
+// @ts-expect-error: Vetur may not infer correct TS module settings for import.meta
 const directApiBase = String((import.meta as any).env?.VITE_DIRECT_API_BASE ?? "http://127.0.0.1:8080").trim();
+// @ts-expect-error: Vetur may not infer correct TS module settings for import.meta
 const rawApiBase = String((import.meta as any).env?.VITE_API_BASE ?? "").trim();
 const apiBaseEnvRaw =
   deployMode === "direct" && (rawApiBase === "" || rawApiBase === "/api" || rawApiBase === "/api/")
@@ -1120,6 +1132,7 @@ const attackTypes = ref<string[]>([
 const customAttackTypeInput = ref("");
 
 const axiosClient = axios.create({ baseURL: apiBaseRoot || undefined });
+const networkOnline = ref(typeof navigator !== "undefined" ? navigator.onLine : true);
 
 const authToken = ref<string>(localStorage.getItem("rb_jwt") ?? "");
 const isAuthed = computed(() => !!authToken.value);
@@ -1129,6 +1142,14 @@ const loginPeek = ref(false);
 const loginErrorPulse = ref(false);
 const sloganTimer = ref<number | null>(null);
 const sloganIndex = ref(0);
+const onOnline = () => {
+  networkOnline.value = true;
+  ElMessage.success("网络已恢复");
+};
+const onOffline = () => {
+  networkOnline.value = false;
+  ElMessage.warning("网络已断开，正在等待恢复");
+};
 const slogans = [
   "Blue Team Defense · Real-time Telemetry",
   "Red Team Attack Paths · Visualized",
@@ -1149,6 +1170,9 @@ axiosClient.interceptors.response.use(
       authToken.value = "";
       localStorage.removeItem("rb_jwt");
       ElMessage.warning("未授权或登录已过期，请重新登录");
+    }
+    if (!err?.response) {
+      ElMessage.error("网络异常，请检查网络连接");
     }
     return Promise.reject(err);
   }
@@ -1217,6 +1241,11 @@ const matchId = ref("");
 const screenTitle = ref("");
 const screenOrganizer = ref("");
 const screenSupporter = ref("");
+const countdownEndTS = ref(0);
+const countdownPicker = ref("");
+const countdownBroadcastMsg = ref("");
+const countdownTogglePanelID = ref("");
+const countdownTogglePanelVisible = ref(true);
 const bgmUrl = ref("");
 const bgmEnabled = ref(false);
 const successSfxUrl = ref("");
@@ -1255,8 +1284,23 @@ const bookmarkForm = reactive({
 });
 const kpi = ref<any>({});
 const trends = ref<Record<string, any[]>>({});
+const analyticsChartType = ref<"bar" | "pie" | "treemap">("bar");
+const analyticsChartEl = ref<HTMLElement | null>(null);
+let analyticsChart: echarts.ECharts | null = null;
 const reportMarkdown = ref("");
 const auditLogs = ref<any[]>([]);
+const auditScope = ref<"match" | "global">("match");
+const auditFilter = reactive({
+  actor: "",
+  module: "",
+});
+const auditFromPicker = ref("");
+const auditToPicker = ref("");
+const auditDetailDialogVisible = ref(false);
+const auditDetail = ref<any | null>(null);
+const auditBeforePretty = ref("");
+const auditAfterPretty = ref("");
+const auditDiffText = ref("");
 const reportMode = ref<"leader" | "tech">("leader");
 const teamImportCSV = ref("name,type,members\n红队一,red,成员A|成员B\n蓝队一,blue,成员C|成员D");
 const broadcastTemplates = ref([
@@ -1366,6 +1410,11 @@ async function fetchState() {
   screenTitle.value = s.screen_title ?? "实战化红蓝对抗演练指挥中心";
   screenOrganizer.value = s.screen_organizer ?? "";
   screenSupporter.value = s.screen_supporter ?? "";
+  countdownEndTS.value = Number(s.countdown_end_ts ?? 0);
+  countdownPicker.value = countdownEndTS.value > 0 ? new Date(countdownEndTS.value * 1000).toISOString().slice(0, 16) : "";
+  countdownBroadcastMsg.value = s.countdown_broadcast_msg ?? "";
+  countdownTogglePanelID.value = s.countdown_toggle_panel_id ?? "";
+  countdownTogglePanelVisible.value = !!s.countdown_toggle_visible;
   bgmUrl.value = s.bgm_url ?? "";
   bgmEnabled.value = !!s.bgm_enabled;
   successSfxUrl.value = s.success_sfx_url ?? "";
@@ -1619,6 +1668,24 @@ function removeAttackType(type: string) {
   }
 }
 
+function applyTemplatePreset(kind: "web-ops" | "trace-blue" | "city-cluster") {
+  if (kind === "web-ops") {
+    templateForm.name = "Web攻防实战模板";
+    templateForm.map_type = "china";
+    templateForm.attack_types_csv = "SQL注入,XSS跨站脚本,命令执行(RCE),未授权访问,弱口令爆破";
+    return;
+  }
+  if (kind === "trace-blue") {
+    templateForm.name = "蓝队溯源防守模板";
+    templateForm.map_type = "taizhou";
+    templateForm.attack_types_csv = "溯源成功,防守成功,账号撞库/凭证填充,SSRF服务端请求伪造";
+    return;
+  }
+  templateForm.name = "地市集群联防模板";
+  templateForm.map_type = "taizhou";
+  templateForm.attack_types_csv = "业务逻辑漏洞,安全配置错误,敏感信息泄露,授权绕过(越权访问)";
+}
+
 async function createMatch() {
   isSubmitting.value = true;
   try {
@@ -1742,6 +1809,37 @@ async function saveScreenTitle() {
 
 async function saveScreenCredits() {
   await submitCommand("set_screen_credits", { organizer: screenOrganizer.value, supporter: screenSupporter.value });
+}
+
+async function saveCountdown() {
+  const raw = countdownPicker.value.trim();
+  if (!raw) {
+    await submitCommand("set_countdown", {
+      end_ts: 0,
+      broadcast_msg: "",
+      toggle_panel_id: "",
+      toggle_panel_visible: false,
+    });
+    countdownEndTS.value = 0;
+    countdownBroadcastMsg.value = "";
+    countdownTogglePanelID.value = "";
+    countdownTogglePanelVisible.value = true;
+    ElMessage.success("倒计时已清空");
+    return;
+  }
+  const ts = Math.floor(new Date(raw).getTime() / 1000);
+  if (!Number.isFinite(ts) || ts <= 0) {
+    ElMessage.warning("倒计时时间无效");
+    return;
+  }
+  await submitCommand("set_countdown", {
+    end_ts: ts,
+    broadcast_msg: countdownBroadcastMsg.value,
+    toggle_panel_id: countdownTogglePanelID.value,
+    toggle_panel_visible: countdownTogglePanelVisible.value,
+  });
+  countdownEndTS.value = ts;
+  ElMessage.success("倒计时已更新");
 }
 
 async function saveAudioConfig() {
@@ -1949,20 +2047,41 @@ function formatRate(v: number | undefined) {
   const n = Number(v ?? 0);
   return `${(n * 100).toFixed(1)}%`;
 }
-const trendRows = computed(() =>
-  Object.entries(trends.value ?? {}).flatMap(([dimension, list]) =>
-    (list ?? []).map((x: any) => ({
-      dimension,
-      key: x.key,
-      value: x.value,
-    }))
-  )
+const trendRows = computed(() => {
+  const out: Array<{ dimension: string; key: string; value: number }> = [];
+  const entries = Object.entries(trends.value ?? {});
+  for (const [dimension, list] of entries) {
+    const arr = (list ?? []) as any[];
+    for (const x of arr) {
+      out.push({
+        dimension,
+        key: String(x?.key ?? ""),
+        value: Number(x?.value ?? 0),
+      });
+    }
+  }
+  return out;
+});
+const taskFlowRows = computed(() =>
+  (tasks.value ?? [])
+    .filter((x: any) => x?.category === "task_flow")
+    .map((x: any) => {
+      const title = String(x?.title ?? "");
+      let flowType = "任务流";
+      if (title.includes("攻击")) flowType = "攻击事件";
+      else if (title.includes("裁判")) flowType = "裁判加扣分";
+      else if (title.includes("广播")) flowType = "广播通知";
+      return { ...x, flow_type: flowType };
+    })
 );
 
 async function loadTemplates() {
   try {
     const res = await requestWithRetry(() => axiosClient.get("/api/match_templates"));
     templates.value = res.data.templates ?? [];
+    if (!selectedTemplateId.value && templates.value.length > 0) {
+      selectedTemplateId.value = templates.value[0].id ?? "";
+    }
   } catch {
     ElMessage.error("模板加载失败");
   }
@@ -2016,6 +2135,17 @@ async function createTask() {
   }
 }
 
+async function updateTaskStatus(taskID: number, status: "todo" | "doing" | "done") {
+  if (!matchId.value) return;
+  try {
+    await axiosClient.patch(`/api/matches/${matchId.value}/tasks/${taskID}`, { status, assignee: "admin" });
+    ElMessage.success("任务状态已更新");
+    await loadTasks();
+  } catch {
+    ElMessage.error("任务状态更新失败");
+  }
+}
+
 async function createBookmark() {
   if (!matchId.value) return;
   try {
@@ -2039,9 +2169,61 @@ async function loadKpi() {
     ]);
     kpi.value = kpiRes.data.kpi ?? {};
     trends.value = trendRes.data.trends ?? {};
+    renderAnalyticsChart();
   } catch {
     ElMessage.error("KPI 加载失败");
   }
+}
+
+function renderAnalyticsChart() {
+  if (!analyticsChartEl.value) return;
+  if (!analyticsChart) analyticsChart = echarts.init(analyticsChartEl.value);
+  const tactic = (trends.value?.tactic ?? []).slice(0, 12);
+  const status = trends.value?.status ?? [];
+  if (analyticsChartType.value === "pie") {
+    analyticsChart.setOption({
+      tooltip: { trigger: "item" },
+      series: [
+        {
+          type: "pie",
+          radius: ["36%", "66%"],
+          data: status.map((x: any) => ({ name: x.key, value: x.value })),
+        },
+      ],
+    });
+    return;
+  }
+  if (analyticsChartType.value === "treemap") {
+    analyticsChart.setOption({
+      tooltip: { trigger: "item" },
+      series: [
+        {
+          type: "treemap",
+          roam: false,
+          nodeClick: false,
+          breadcrumb: { show: false },
+          data: tactic.map((x: any) => ({ name: x.key, value: x.value })),
+        },
+      ],
+    });
+    return;
+  }
+  analyticsChart.setOption({
+    tooltip: { trigger: "axis" },
+    xAxis: {
+      type: "category",
+      data: tactic.map((x: any) => x.key),
+      axisLabel: { rotate: 25 },
+    },
+    yAxis: { type: "value" },
+    series: [
+      {
+        type: "bar",
+        barWidth: 22,
+        data: tactic.map((x: any) => x.value),
+      },
+    ],
+  });
 }
 
 async function generateReport() {
@@ -2073,10 +2255,144 @@ async function downloadReportPDF() {
   }
 }
 
-async function loadAuditLogs() {
-  if (!matchId.value) return;
+function safeParseJSON(raw: string) {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
   try {
-    const res = await requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/audit_logs`));
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+function prettyJSON(raw: string) {
+  const v = safeParseJSON(raw);
+  if (v == null) return String(raw ?? "");
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(raw ?? "");
+  }
+}
+
+type AuditDiffChange = { path: string; before: any; after: any };
+
+function diffJSON(before: any, after: any) {
+  const changes: AuditDiffChange[] = [];
+  const maxDepth = 6;
+  const maxChanges = 80;
+
+  function isPlainObject(x: any) {
+    return x !== null && typeof x === "object" && !Array.isArray(x);
+  }
+
+  function record(path: string, b: any, a: any) {
+    if (changes.length >= maxChanges) return;
+    changes.push({ path, before: b, after: a });
+  }
+
+  function deepEqual(a: any, b: any) {
+    // 用于小规模 diff，modal 展示允许稍微慢一点
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch {
+      return a === b;
+    }
+  }
+
+  function walk(b: any, a: any, path: string, depth: number) {
+    if (changes.length >= maxChanges) return;
+    if (deepEqual(b, a)) return;
+    if (depth > maxDepth) {
+      record(path || "(root)", b, a);
+      return;
+    }
+
+    const bIsArr = Array.isArray(b);
+    const aIsArr = Array.isArray(a);
+    if (bIsArr || aIsArr) {
+      const bArr = bIsArr ? b : [];
+      const aArr = aIsArr ? a : [];
+      const maxI = Math.min(Math.max(bArr.length, aArr.length), 12);
+      for (let i = 0; i < maxI; i++) {
+        const nextPath = `${path}[${i}]`;
+        if (i >= bArr.length || i >= aArr.length) {
+          record(nextPath, bArr[i], aArr[i]);
+        } else {
+          walk(bArr[i], aArr[i], nextPath, depth + 1);
+        }
+      }
+      if (bArr.length !== aArr.length) {
+        record(`${path}.length`, bArr.length, aArr.length);
+      }
+      return;
+    }
+
+    if (isPlainObject(b) && isPlainObject(a)) {
+      const keys = new Set<string>([...Object.keys(b), ...Object.keys(a)]);
+      for (const k of keys) {
+        const nextPath = path ? `${path}.${k}` : k;
+        if (!(k in b)) record(nextPath, undefined, a[k]);
+        else if (!(k in a)) record(nextPath, b[k], undefined);
+        else walk(b[k], a[k], nextPath, depth + 1);
+      }
+      return;
+    }
+
+    // 原子类型/类型不匹配
+    record(path || "(root)", b, a);
+  }
+
+  walk(before, after, "", 0);
+  if (!changes.length) return "无差异";
+  return changes
+    .map((c) => {
+      const bStr = typeof c.before === "string" ? c.before : JSON.stringify(c.before);
+      const aStr = typeof c.after === "string" ? c.after : JSON.stringify(c.after);
+      return `- ${c.path}\n  - before: ${bStr}\n  - after:  ${aStr}`;
+    })
+    .join("\n\n");
+}
+
+function openAuditDetail(row: any) {
+  auditDetail.value = row ?? null;
+  const beforeRaw = String(row?.before ?? "");
+  const afterRaw = String(row?.after ?? "");
+
+  auditBeforePretty.value = prettyJSON(beforeRaw);
+  auditAfterPretty.value = prettyJSON(afterRaw);
+
+  const beforeObj = safeParseJSON(beforeRaw);
+  const afterObj = safeParseJSON(afterRaw);
+
+  if (beforeObj != null && afterObj != null) {
+    auditDiffText.value = diffJSON(beforeObj, afterObj);
+  } else {
+    auditDiffText.value = beforeRaw === afterRaw ? "无差异" : `- (raw)\n  - before: ${beforeRaw}\n  - after:  ${afterRaw}`;
+  }
+
+  auditDetailDialogVisible.value = true;
+}
+
+async function loadAuditLogs() {
+  try {
+    const params: any = {};
+    if (auditFilter.actor.trim()) params.actor = auditFilter.actor.trim();
+    if (auditFilter.module.trim()) params.module = auditFilter.module.trim();
+    if (auditFromPicker.value.trim()) {
+      const ts = Math.floor(new Date(auditFromPicker.value).getTime() / 1000);
+      if (Number.isFinite(ts) && ts > 0) params.from_ts = ts;
+    }
+    if (auditToPicker.value.trim()) {
+      const ts = Math.floor(new Date(auditToPicker.value).getTime() / 1000);
+      if (Number.isFinite(ts) && ts > 0) params.to_ts = ts;
+    }
+    const scope = auditScope.value;
+    if (scope === "match" && !matchId.value) return;
+
+    const url =
+      scope === "global" ? "/api/admin/audit_logs" : `/api/matches/${matchId.value}/audit_logs`;
+    const res = await requestWithRetry(() => axiosClient.get(url, { params }));
     auditLogs.value = res.data.audit_logs ?? [];
   } catch {
     ElMessage.error("审计日志加载失败");
@@ -2123,6 +2439,8 @@ async function bulkSyncTeams() {
 }
 
 onMounted(async () => {
+  window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
   sloganTimer.value = window.setInterval(() => {
     sloganIndex.value = (sloganIndex.value + 1) % slogans.length;
   }, 2600);
@@ -2131,6 +2449,7 @@ onMounted(async () => {
   await fetchState();
   await fetchTeams();
   await loadTemplates();
+  renderAnalyticsChart();
   window.addEventListener("keydown", handleAdminHotkeys);
 });
 
@@ -2140,6 +2459,18 @@ onBeforeUnmount(() => {
     sloganTimer.value = null;
   }
   window.removeEventListener("keydown", handleAdminHotkeys);
+  window.removeEventListener("online", onOnline);
+  window.removeEventListener("offline", onOffline);
+  analyticsChart?.dispose();
+  analyticsChart = null;
+});
+
+watch(analyticsChartType, () => renderAnalyticsChart());
+watch(trends, () => renderAnalyticsChart(), { deep: true });
+watch(auditScope, () => {
+  // 切换范围后自动刷新；若需要 match_id 但尚未选择则跳过
+  if (auditScope.value === "match" && !matchId.value) return;
+  void loadAuditLogs();
 });
 </script>
 
@@ -2167,6 +2498,37 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+.net-indicator {
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.net-indicator .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.net-indicator.ok {
+  color: #0f766e;
+  border-color: rgba(15, 118, 110, 0.25);
+  background: rgba(16, 185, 129, 0.08);
+}
+.net-indicator.ok .dot {
+  background: #10b981;
+}
+.net-indicator.bad {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.25);
+  background: rgba(239, 68, 68, 0.08);
+}
+.net-indicator.bad .dot {
+  background: #ef4444;
 }
 .admin-logo {
   width: 12px;
@@ -2319,7 +2681,7 @@ onBeforeUnmount(() => {
 }
 
 .admin-section {
-  max-width: 1280px;
+  max-width: 100%;
 }
 .section-header {
   margin-bottom: 16px;
@@ -2386,7 +2748,7 @@ onBeforeUnmount(() => {
 }
 .card-title {
   font-weight: 800;
-  font-size: 16px;
+  font-size: clamp(16px, 0.9vw + 10px, 22px);
 }
 .row {
   display: flex;
@@ -2396,7 +2758,7 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 .label {
-  font-size: 12px;
+  font-size: clamp(12px, 0.4vw + 9px, 16px);
   color: rgba(17, 24, 39, 0.6);
   margin-bottom: 6px;
 }
@@ -2420,6 +2782,7 @@ onBeforeUnmount(() => {
 }
 .score {
   font-weight: 700;
+  font-size: clamp(20px, 1vw + 12px, 34px);
   color: #2563eb;
 }
 

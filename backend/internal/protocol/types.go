@@ -35,6 +35,11 @@ type MatchStateDTO struct {
 	Teams              []TeamDTO         `json:"teams"`
 	AttackStats        []AttackStatDTO   `json:"attack_stats"`
 	Panels             map[string]bool   `json:"panels"`
+	CountdownEndTS     int64             `json:"countdown_end_ts"`
+	CountdownBroadcastMsg string        `json:"countdown_broadcast_msg"`
+	CountdownTogglePanelID string       `json:"countdown_toggle_panel_id"`
+	CountdownToggleVisible bool        `json:"countdown_toggle_visible"`
+	CountdownTriggered bool            `json:"countdown_triggered"`
 	ScreenTitle        string            `json:"screen_title"`
 	ScreenOrganizer    string            `json:"screen_organizer"`
 	ScreenSupporter    string            `json:"screen_supporter"`

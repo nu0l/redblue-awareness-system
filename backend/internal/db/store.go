@@ -48,6 +48,11 @@ func (s *Store) migrate() error {
 			map_type TEXT NOT NULL,
 			leaderboard_visible INTEGER NOT NULL,
 			panels_json TEXT NOT NULL,
+			countdown_end_ts INTEGER NOT NULL DEFAULT 0,
+			countdown_broadcast_msg TEXT NOT NULL DEFAULT '',
+			countdown_toggle_panel_id TEXT NOT NULL DEFAULT '',
+			countdown_toggle_visible INTEGER NOT NULL DEFAULT 1,
+			countdown_triggered INTEGER NOT NULL DEFAULT 0,
 			screen_title TEXT NOT NULL DEFAULT '实战化红蓝对抗演练指挥中心',
 			screen_organizer TEXT NOT NULL DEFAULT '',
 			screen_supporter TEXT NOT NULL DEFAULT '',
@@ -148,6 +153,11 @@ func (s *Store) migrate() error {
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN success_sfx_url TEXT NOT NULL DEFAULT ''`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN success_sfx_enabled INTEGER NOT NULL DEFAULT 0`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN leaderboard_main_alpha REAL NOT NULL DEFAULT 0.14`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_end_ts INTEGER NOT NULL DEFAULT 0`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_broadcast_msg TEXT NOT NULL DEFAULT ''`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_toggle_panel_id TEXT NOT NULL DEFAULT ''`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_toggle_visible INTEGER NOT NULL DEFAULT 1`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_triggered INTEGER NOT NULL DEFAULT 0`)
 
 	// 迁移回填：对于旧数据，如果 initial_* 仍为空，则用当前配置做兜底，避免回放读到空值。
 	_, _ = s.db.Exec(`UPDATE matches SET initial_map_type = map_type WHERE initial_map_type IS NULL`)
@@ -264,11 +274,16 @@ func (s *Store) ListMatches() ([]MatchSummary, error) {
 
 func (s *Store) GetMatchPanels(
 	matchID string,
-) (mapType string, leaderboardVisible bool, panels map[string]bool, screenTitle string, screenOrganizer string, screenSupporter string, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
+) (mapType string, leaderboardVisible bool, panels map[string]bool, countdownEndTS int64, countdownBroadcastMsg string, countdownTogglePanelID string, countdownToggleVisible bool, countdownTriggered bool, screenTitle string, screenOrganizer string, screenSupporter string, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
 	var (
 		mapTypeDB              string
 		leaderboardInt         int
 		panelsJSON             string
+		countdownEndTSDB       int64
+		countdownBroadcastMsgDB   string
+		countdownTogglePanelIDDB  string
+		countdownToggleVisibleInt int
+		countdownTriggeredInt     int
 		screenTitleDB          string
 		screenOrganizerDB      string
 		screenSupporterDB      string
@@ -280,21 +295,66 @@ func (s *Store) GetMatchPanels(
 		leaderboardMainAlphaDB float64
 	)
 	err = s.db.QueryRow(
-		`SELECT map_type, leaderboard_visible, panels_json, screen_title, screen_organizer, screen_supporter, COALESCE(leaderboard_bg_url, ''), COALESCE(bgm_url, ''), COALESCE(bgm_enabled, 0), COALESCE(success_sfx_url, ''), COALESCE(success_sfx_enabled, 0), COALESCE(leaderboard_main_alpha, 0.14) FROM matches WHERE id = ?`,
+		`SELECT map_type, leaderboard_visible, panels_json,
+			COALESCE(countdown_end_ts, 0),
+			COALESCE(countdown_broadcast_msg, ''),
+			COALESCE(countdown_toggle_panel_id, ''),
+			COALESCE(countdown_toggle_visible, 1),
+			COALESCE(countdown_triggered, 0),
+			screen_title, screen_organizer, screen_supporter,
+			COALESCE(leaderboard_bg_url, ''), COALESCE(bgm_url, ''), COALESCE(bgm_enabled, 0),
+			COALESCE(success_sfx_url, ''), COALESCE(success_sfx_enabled, 0),
+			COALESCE(leaderboard_main_alpha, 0.14)
+		  FROM matches WHERE id = ?`,
 		matchID,
-	).Scan(&mapTypeDB, &leaderboardInt, &panelsJSON, &screenTitleDB, &screenOrganizerDB, &screenSupporterDB, &leaderboardBGDB, &bgmURLDB, &bgmEnabledInt, &successSFXURLDB, &successSFXEnabledInt, &leaderboardMainAlphaDB)
+	).Scan(
+		&mapTypeDB,
+		&leaderboardInt,
+		&panelsJSON,
+		&countdownEndTSDB,
+		&countdownBroadcastMsgDB,
+		&countdownTogglePanelIDDB,
+		&countdownToggleVisibleInt,
+		&countdownTriggeredInt,
+		&screenTitleDB,
+		&screenOrganizerDB,
+		&screenSupporterDB,
+		&leaderboardBGDB,
+		&bgmURLDB,
+		&bgmEnabledInt,
+		&successSFXURLDB,
+		&successSFXEnabledInt,
+		&leaderboardMainAlphaDB,
+	)
 	if err != nil {
-		return "", false, nil, "", "", "", "", "", false, "", false, 0.14, err
+		return "", false, nil, 0, "", "", false, false, "", "", "", "", "", false, "", false, 0.14, err
 	}
 
 	panels = make(map[string]bool)
 	if panelsJSON != "" {
 		if err := json.Unmarshal([]byte(panelsJSON), &panels); err != nil {
-			return "", false, nil, "", "", "", "", "", false, "", false, 0.14, err
+			return "", false, nil, 0, "", "", false, false, "", "", "", "", "", false, "", false, 0.14, err
 		}
 	}
 
-	return mapTypeDB, leaderboardInt == 1, panels, screenTitleDB, screenOrganizerDB, screenSupporterDB, leaderboardBGDB, bgmURLDB, bgmEnabledInt == 1, successSFXURLDB, successSFXEnabledInt == 1, leaderboardMainAlphaDB, nil
+	return mapTypeDB,
+		leaderboardInt == 1,
+		panels,
+		countdownEndTSDB,
+		countdownBroadcastMsgDB,
+		countdownTogglePanelIDDB,
+		countdownToggleVisibleInt == 1,
+		countdownTriggeredInt == 1,
+		screenTitleDB,
+		screenOrganizerDB,
+		screenSupporterDB,
+		leaderboardBGDB,
+		bgmURLDB,
+		bgmEnabledInt == 1,
+		successSFXURLDB,
+		successSFXEnabledInt == 1,
+		leaderboardMainAlphaDB,
+		nil
 }
 
 func (s *Store) UpdateMatchConfig(matchID string, mapType string, leaderboardVisible bool, panels map[string]bool) error {
@@ -374,6 +434,56 @@ func (s *Store) UpdateMatchLeaderboardMainAlpha(matchID string, alpha float64) e
 	return err
 }
 
+func (s *Store) UpdateMatchCountdownConfig(
+	matchID string,
+	countdownEndTS int64,
+	broadcastMsg string,
+	togglePanelID string,
+	toggleVisible bool,
+) error {
+	if countdownEndTS < 0 {
+		countdownEndTS = 0
+	}
+	triggeredInt := 0
+	// 只要配置被更新（包括清空倒计时），就重置“是否已触发”
+	// 后续定时触发会再决定是否触发。
+	_, err := s.db.Exec(
+		`UPDATE matches
+		 SET countdown_end_ts = ?,
+		     countdown_broadcast_msg = ?,
+		     countdown_toggle_panel_id = ?,
+		     countdown_toggle_visible = ?,
+		     countdown_triggered = ?
+		 WHERE id = ?`,
+		countdownEndTS,
+		strings.TrimSpace(broadcastMsg),
+		strings.TrimSpace(togglePanelID),
+		func() int { if toggleVisible { return 1 }; return 0 }(),
+		triggeredInt,
+		matchID,
+	)
+	return err
+}
+
+func (s *Store) TryTriggerCountdown(matchID string, endTS int64) (bool, error) {
+	if endTS <= 0 {
+		return false, nil
+	}
+	res, err := s.db.Exec(
+		`UPDATE matches SET countdown_triggered = 1 WHERE id=? AND countdown_end_ts=? AND countdown_triggered=0`,
+		matchID,
+		endTS,
+	)
+	if err != nil {
+		return false, err
+	}
+	ra, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return ra > 0, nil
+}
+
 func (s *Store) ResetAll() error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -404,11 +514,16 @@ func (s *Store) ResetMatch(matchID string) error {
 
 func (s *Store) GetMatchInitialConfig(
 	matchID string,
-) (mapType string, leaderboardVisible bool, panels map[string]bool, screenTitle string, screenOrganizer string, screenSupporter string, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
+) (mapType string, leaderboardVisible bool, panels map[string]bool, countdownEndTS int64, countdownBroadcastMsg string, countdownTogglePanelID string, countdownToggleVisible bool, countdownTriggered bool, screenTitle string, screenOrganizer string, screenSupporter string, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
 	var (
 		mapTypeDB              string
 		lvInt                  int
 		panelsJSON             string
+		countdownEndTSDB       int64
+		countdownBroadcastMsgDB   string
+		countdownTogglePanelIDDB  string
+		countdownToggleVisibleInt int
+		countdownTriggeredInt     int
 		leaderboardBGDB        string
 		bgmURLDB               string
 		bgmEnabledInt          int
@@ -421,6 +536,11 @@ func (s *Store) GetMatchInitialConfig(
 			COALESCE(initial_map_type, map_type) as map_type,
 			COALESCE(initial_leaderboard_visible, leaderboard_visible) as leaderboard_visible,
 			COALESCE(initial_panels_json, panels_json) as panels_json,
+			COALESCE(countdown_end_ts, 0) as countdown_end_ts,
+			COALESCE(countdown_broadcast_msg, '') as countdown_broadcast_msg,
+			COALESCE(countdown_toggle_panel_id, '') as countdown_toggle_panel_id,
+			COALESCE(countdown_toggle_visible, 1) as countdown_toggle_visible,
+			COALESCE(countdown_triggered, 0) as countdown_triggered,
 			COALESCE(screen_title, '实战化红蓝对抗演练指挥中心') as screen_title,
 			COALESCE(screen_organizer, '') as screen_organizer,
 			COALESCE(screen_supporter, '') as screen_supporter,
@@ -433,18 +553,35 @@ func (s *Store) GetMatchInitialConfig(
 		  FROM matches WHERE id = ?`,
 		matchID,
 	)
-	err = row.Scan(&mapTypeDB, &lvInt, &panelsJSON, &screenTitle, &screenOrganizer, &screenSupporter, &leaderboardBGDB, &bgmURLDB, &bgmEnabledInt, &successSFXURLDB, &successSFXEnabledInt, &leaderboardMainAlphaDB)
+	err = row.Scan(&mapTypeDB, &lvInt, &panelsJSON, &countdownEndTSDB, &countdownBroadcastMsgDB, &countdownTogglePanelIDDB, &countdownToggleVisibleInt, &countdownTriggeredInt, &screenTitle, &screenOrganizer, &screenSupporter, &leaderboardBGDB, &bgmURLDB, &bgmEnabledInt, &successSFXURLDB, &successSFXEnabledInt, &leaderboardMainAlphaDB)
 	if err != nil {
-		return "", false, nil, "", "", "", "", "", false, "", false, 0.14, err
+		return "", false, nil, 0, "", "", false, false, "", "", "", "", "", false, "", false, 0.14, err
 	}
 
 	panels = make(map[string]bool)
 	if panelsJSON != "" {
 		if err := json.Unmarshal([]byte(panelsJSON), &panels); err != nil {
-			return "", false, nil, "", "", "", "", "", false, "", false, 0.14, err
+			return "", false, nil, 0, "", "", false, false, "", "", "", "", "", false, "", false, 0.14, err
 		}
 	}
-	return mapTypeDB, lvInt == 1, panels, screenTitle, screenOrganizer, screenSupporter, leaderboardBGDB, bgmURLDB, bgmEnabledInt == 1, successSFXURLDB, successSFXEnabledInt == 1, leaderboardMainAlphaDB, nil
+	return mapTypeDB,
+		lvInt == 1,
+		panels,
+		countdownEndTSDB,
+		countdownBroadcastMsgDB,
+		countdownTogglePanelIDDB,
+		countdownToggleVisibleInt == 1,
+		countdownTriggeredInt == 1,
+		screenTitle,
+		screenOrganizer,
+		screenSupporter,
+		leaderboardBGDB,
+		bgmURLDB,
+		bgmEnabledInt == 1,
+		successSFXURLDB,
+		successSFXEnabledInt == 1,
+		leaderboardMainAlphaDB,
+		nil
 }
 
 func (s *Store) ListTeams(matchID string) ([]protocol.TeamDTO, error) {

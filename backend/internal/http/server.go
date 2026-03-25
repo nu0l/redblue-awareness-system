@@ -97,6 +97,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/geojson/", s.handleGeoJSONProxy)
 	mux.HandleFunc("/api/admin/login", s.handleAdminLogin)
 	mux.HandleFunc("/api/admin/reset", s.handleAdminReset)
+	mux.HandleFunc("/api/admin/audit_logs", s.handleAdminAuditLogsRoot)
+	mux.HandleFunc("/api/admin/audit_logs/", s.handleAdminAuditLogsSub)
 
 	mux.HandleFunc("/api/matches", s.handleMatchesRoot)
 	mux.HandleFunc("/api/matches/", s.handleMatchesSub)
@@ -596,6 +598,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 				respondForbidden(w, r)
 				return
 			}
+			beforeState := s.captureMatchStateJSON(matchID)
 
 			var req protocol.TeamDTO
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -626,6 +629,8 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 				s.hub.Broadcast(matchID, *wsMsg)
 			}
 			auditTeamMutation(r, claims, matchID, "create", teamID)
+			afterState := s.captureMatchStateJSON(matchID)
+			_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "create", Before: beforeState, After: afterState})
 			writeJSON(w, map[string]any{"team_id": teamID})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -635,6 +640,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/teams/import
 	if len(parts) == 3 && parts[1] == "teams" && parts[2] == "import" && r.Method == http.MethodPost {
+		beforeState := s.captureMatchStateJSON(matchID)
 		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
@@ -682,13 +688,15 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{EventType: "teams_updated", Data: json.RawMessage(`{}`)}); err == nil {
 			s.hub.Broadcast(matchID, *wsMsg)
 		}
-		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "import_csv", After: req.CSVText})
+		afterState := s.captureMatchStateJSON(matchID)
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "import_csv", Before: beforeState, After: afterState})
 		writeJSON(w, map[string]any{"ok": true, "created": created})
 		return
 	}
 
 	// /api/matches/{match_id}/teams/batch_update
 	if len(parts) == 3 && parts[1] == "teams" && parts[2] == "batch_update" && r.Method == http.MethodPut {
+		beforeState := s.captureMatchStateJSON(matchID)
 		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
@@ -710,13 +718,15 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{EventType: "teams_updated", Data: json.RawMessage(`{}`)}); err == nil {
 			s.hub.Broadcast(matchID, *wsMsg)
 		}
-		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "batch_update", After: "bulk"})
+		afterState := s.captureMatchStateJSON(matchID)
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "batch_update", Before: beforeState, After: afterState})
 		writeJSON(w, map[string]any{"ok": true, "updated": len(req.Teams)})
 		return
 	}
 
 	// /api/matches/{match_id}/teams/{team_id}
 	if len(parts) == 3 && parts[1] == "teams" && r.Method == http.MethodPut {
+		beforeState := s.captureMatchStateJSON(matchID)
 		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
@@ -756,10 +766,13 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			s.hub.Broadcast(matchID, *wsMsg)
 		}
 		auditTeamMutation(r, claims, matchID, "update", teamID)
+		afterState := s.captureMatchStateJSON(matchID)
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "update", Before: beforeState, After: afterState})
 		writeJSON(w, map[string]any{"ok": true})
 		return
 	}
 	if len(parts) == 3 && parts[1] == "teams" && r.Method == http.MethodDelete {
+		beforeState := s.captureMatchStateJSON(matchID)
 		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
@@ -781,6 +794,8 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			s.hub.Broadcast(matchID, *wsMsg)
 		}
 		auditTeamMutation(r, claims, matchID, "delete", teamID)
+		afterState := s.captureMatchStateJSON(matchID)
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "delete", Before: beforeState, After: afterState})
 		writeJSON(w, map[string]any{"ok": true})
 		return
 	}
@@ -822,6 +837,12 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
+		beforeState := ""
+		if st, err := s.matcher.GetStateDTO(matchID); err == nil {
+			if b, e := json.Marshal(st); e == nil {
+				beforeState = string(b)
+			}
+		}
 		// 交给 matcher 执行并返回 state+broadcast 消息
 		wsMsg, err := s.matcher.ApplyCommand(matchID, req)
 		if err != nil {
@@ -837,14 +858,24 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			Role:    claims.Role,
 			Module:  "command",
 			Action:  req.EventType,
+			Before:  beforeState,
 			After:   string(req.Data),
 		})
 		switch req.EventType {
 		case "attack_success", "manual_score", "system_broadcast":
+			taskTitle := "任务流事件"
+			switch req.EventType {
+			case "attack_success":
+				taskTitle = "任务流：攻击事件"
+			case "manual_score":
+				taskTitle = "任务流：裁判加扣分"
+			case "system_broadcast":
+				taskTitle = "任务流：广播通知"
+			}
 			_, _ = s.store.CreateTask(db.TaskItem{
 				MatchID:   matchID,
-				Category:  req.EventType,
-				Title:     "自动任务：" + req.EventType,
+				Category:  "task_flow",
+				Title:     taskTitle,
 				Status:    "done",
 				Assignee:  claims.Sub,
 				CreatedBy: claims.Sub,
@@ -940,7 +971,8 @@ func (s *Server) handleLeaderboardBackgroundUpload(w http.ResponseWriter, r *htt
 		http.Error(w, "upload disabled (uploads dir not configured)", http.StatusServiceUnavailable)
 		return
 	}
-	if _, _, _, _, _, _, _, _, _, _, _, _, err := s.store.GetMatchPanels(matchID); err != nil {
+	beforeState := s.captureMatchStateJSON(matchID)
+	if _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, err := s.store.GetMatchPanels(matchID); err != nil {
 		http.Error(w, "match not found", http.StatusNotFound)
 		return
 	}
@@ -991,11 +1023,14 @@ func (s *Server) handleLeaderboardBackgroundUpload(w http.ResponseWriter, r *htt
 	s.matcher.InvalidateCache(matchID)
 	s.broadcastSyncState(matchID)
 	auditFileUpload(r, claims, matchID, "leaderboard_bg", pubPath)
+	afterState := s.captureMatchStateJSON(matchID)
+	_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "screen", Action: "leaderboard_bg_upload", Before: beforeState, After: afterState})
 	writeJSON(w, map[string]any{"ok": true, "leaderboard_bg_url": pubPath})
 }
 
 func (s *Server) handleLeaderboardBackgroundDelete(w http.ResponseWriter, r *http.Request, matchID string, claims *JWTClaims) {
-	if _, _, _, _, _, _, _, _, _, _, _, _, err := s.store.GetMatchPanels(matchID); err != nil {
+	beforeState := s.captureMatchStateJSON(matchID)
+	if _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, err := s.store.GetMatchPanels(matchID); err != nil {
 		http.Error(w, "match not found", http.StatusNotFound)
 		return
 	}
@@ -1013,6 +1048,8 @@ func (s *Server) handleLeaderboardBackgroundDelete(w http.ResponseWriter, r *htt
 	s.matcher.InvalidateCache(matchID)
 	s.broadcastSyncState(matchID)
 	auditFileUpload(r, claims, matchID, "leaderboard_bg_clear", "")
+	afterState := s.captureMatchStateJSON(matchID)
+	_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "screen", Action: "leaderboard_bg_clear", Before: beforeState, After: afterState})
 	writeJSON(w, map[string]any{"ok": true})
 }
 
@@ -1021,7 +1058,25 @@ func (s *Server) handleAudioUpload(w http.ResponseWriter, r *http.Request, match
 		http.Error(w, "upload disabled (uploads dir not configured)", http.StatusServiceUnavailable)
 		return
 	}
-	mapType, leaderboardVisible, panels, screenTitle, screenOrganizer, screenSupporter, leaderboardBG, bgmURL, bgmEnabled, successSFXURL, successSFXEnabled, leaderboardMainAlpha, err := s.store.GetMatchPanels(matchID)
+	beforeState := s.captureMatchStateJSON(matchID)
+	mapType,
+		leaderboardVisible,
+		panels,
+		_,
+		_,
+		_,
+		_,
+		_,
+		screenTitle,
+		screenOrganizer,
+		screenSupporter,
+		leaderboardBG,
+		bgmURL,
+		bgmEnabled,
+		successSFXURL,
+		successSFXEnabled,
+		leaderboardMainAlpha,
+		err := s.store.GetMatchPanels(matchID)
 	_ = mapType
 	_ = leaderboardVisible
 	_ = panels
@@ -1099,6 +1154,8 @@ func (s *Server) handleAudioUpload(w http.ResponseWriter, r *http.Request, match
 	s.matcher.InvalidateCache(matchID)
 	s.broadcastSyncState(matchID)
 	auditFileUpload(r, claims, matchID, kind, pubPath)
+	afterState := s.captureMatchStateJSON(matchID)
+	_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "audio", Action: "upload_" + kind, Before: beforeState, After: afterState})
 	writeJSON(w, map[string]any{"ok": true, "kind": kind, "url": pubPath})
 }
 
@@ -1120,6 +1177,18 @@ func splitPath(path string) []string {
 func writeJSON(w http.ResponseWriter, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (s *Server) captureMatchStateJSON(matchID string) string {
+	st, err := s.matcher.GetStateDTO(matchID)
+	if err != nil || st == nil {
+		return ""
+	}
+	b, err := json.Marshal(st)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func withCORS(h http.Handler) http.Handler {

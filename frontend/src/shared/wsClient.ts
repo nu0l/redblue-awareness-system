@@ -22,11 +22,15 @@ function toWsUrl(httpBase: string, matchId: string, token?: string) {
 export function connectMatchWS(opts: Options) {
   let ws: WebSocket | null = null;
   let timer: number | undefined;
+  let retryCount = 0;
+  let closedByUser = false;
 
   const connect = () => {
+    if (closedByUser) return;
     opts.onStatus?.("connecting");
     ws = new WebSocket(toWsUrl(opts.apiBaseHttp, opts.matchId, opts.token));
     ws.onopen = () => {
+      retryCount = 0;
       opts.onStatus?.("connected");
       opts.onOpen?.();
     };
@@ -39,9 +43,13 @@ export function connectMatchWS(opts: Options) {
       }
     };
     ws.onclose = () => {
+      if (closedByUser) return;
       opts.onStatus?.("reconnecting");
       opts.onClose?.();
-      timer = window.setTimeout(connect, 3000);
+      const backoff = Math.min(15000, 1000 * Math.pow(1.8, retryCount));
+      const jitter = Math.floor(Math.random() * 350);
+      retryCount += 1;
+      timer = window.setTimeout(connect, backoff + jitter);
     };
     ws.onerror = () => {
       // let onclose trigger reconnection
@@ -52,6 +60,7 @@ export function connectMatchWS(opts: Options) {
 
   return {
     close: () => {
+      closedByUser = true;
       if (timer) window.clearTimeout(timer);
       ws?.close();
       opts.onStatus?.("closed");

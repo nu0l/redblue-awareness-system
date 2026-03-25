@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -55,6 +56,12 @@ func (s *Server) handleMatchTemplates(w http.ResponseWriter, r *http.Request, cl
 				http.Error(w, "invalid body", http.StatusBadRequest)
 				return
 			}
+			beforeTemplate := ""
+			if old, err := s.store.GetMatchTemplate(strings.TrimSpace(req.ID)); err == nil && old != nil {
+				if b, e := json.Marshal(old); e == nil {
+					beforeTemplate = string(b)
+				}
+			}
 			if strings.TrimSpace(req.ID) == "" {
 				req.ID = "tpl-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
 			}
@@ -62,6 +69,19 @@ func (s *Server) handleMatchTemplates(w http.ResponseWriter, r *http.Request, cl
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			afterTemplate := ""
+			if b, e := json.Marshal(req); e == nil {
+				afterTemplate = string(b)
+			}
+			_ = s.store.CreateAuditLog(db.AuditLog{
+				MatchID: "template:" + req.ID,
+				Actor:   claims.Sub,
+				Role:    claims.Role,
+				Module:  "templates",
+				Action:  "upsert",
+				Before:  beforeTemplate,
+				After:   afterTemplate,
+			})
 			writeJSON(w, map[string]any{"ok": true, "template_id": req.ID})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -105,6 +125,7 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 				respondForbidden(w, r)
 				return true
 			}
+			beforeState := s.captureMatchStateJSON(matchID)
 			var req db.TaskItem
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "invalid body", http.StatusBadRequest)
@@ -117,7 +138,8 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return true
 			}
-			_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "tasks", Action: "create", After: fmt.Sprintf(`{"task_id":%d}`, id)})
+			afterState := s.captureMatchStateJSON(matchID)
+			_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "tasks", Action: "create", Before: beforeState, After: afterState})
 			writeJSON(w, map[string]any{"ok": true, "task_id": id})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -126,6 +148,7 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 	}
 
 	if len(parts) == 3 && parts[1] == "tasks" && r.Method == http.MethodPatch {
+		beforeState := s.captureMatchStateJSON(matchID)
 		if claims.Role == "observer" {
 			respondForbidden(w, r)
 			return true
@@ -147,7 +170,8 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return true
 		}
-		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "tasks", Action: "update_status", After: fmt.Sprintf(`{"task_id":%d,"status":"%s"}`, taskID, req.Status)})
+		afterState := s.captureMatchStateJSON(matchID)
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "tasks", Action: "update_status", Before: beforeState, After: afterState})
 		writeJSON(w, map[string]any{"ok": true})
 		return true
 	}
@@ -162,6 +186,7 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 			}
 			writeJSON(w, map[string]any{"bookmarks": items})
 		case http.MethodPost:
+			beforeState := s.captureMatchStateJSON(matchID)
 			var req db.EventBookmark
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "invalid body", http.StatusBadRequest)
@@ -174,6 +199,8 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return true
 			}
+			afterState := s.captureMatchStateJSON(matchID)
+			_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "bookmarks", Action: "create", Before: beforeState, After: afterState})
 			writeJSON(w, map[string]any{"ok": true, "bookmark_id": id})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -253,9 +280,29 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 		if len(topTactics) > 5 {
 			topTactics = topTactics[:5]
 		}
+		teams, _ := s.store.ListTeams(matchID)
+		audits, _ := s.store.ListAuditLogs(matchID, "", "", 0, 0)
+		if len(audits) > 10 {
+			audits = audits[:10]
+		}
 		var report strings.Builder
 		report.WriteString(fmt.Sprintf("# %s 赛后复盘报告（%s）\n\n", matchID, mode))
+		report.WriteString(fmt.Sprintf("- 生成时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
 		report.WriteString(fmt.Sprintf("- 总事件数: %d\n- 有效攻击率: %.2f\n- 溯源成功率: %.2f\n- 平均响应时延(秒): %.2f\n- 红蓝净分差: %d\n\n", kpi.TotalEvents, kpi.EffectiveAttackRate, kpi.TraceSuccessRate, kpi.AvgResponseSeconds, kpi.NetScoreDiff))
+		if len(teams) > 0 {
+			report.WriteString("## 队伍积分榜\n")
+			for i := range teams {
+				for j := i + 1; j < len(teams); j++ {
+					if teams[j].Score > teams[i].Score {
+						teams[i], teams[j] = teams[j], teams[i]
+					}
+				}
+			}
+			for i, t := range teams {
+				report.WriteString(fmt.Sprintf("- #%d %s（%s）: %d\n", i+1, t.Name, t.Type, t.Score))
+			}
+			report.WriteString("\n")
+		}
 		if mode == "tech" {
 			report.WriteString("## TOP 战术\n")
 			for _, p := range topTactics {
@@ -270,6 +317,12 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 			}
 		} else {
 			report.WriteString("## 摘要\n- 本报告为领导简版，建议结合技术详版查看战术细节。\n")
+		}
+		if len(audits) > 0 {
+			report.WriteString("\n## 最近关键操作审计\n")
+			for _, a := range audits {
+				report.WriteString(fmt.Sprintf("- [%d] %s / %s / %s\n", a.CreatedAt, a.Actor, a.Module, a.Action))
+			}
 		}
 		if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("format")), "pdf") {
 			out := buildSimplePDF(report.String())
@@ -302,15 +355,22 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 }
 
 func buildSimplePDF(text string) []byte {
-	escaped := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(text, "\\", "\\\\"), "(", "\\("), ")", "\\)")
-	lines := strings.Split(escaped, "\n")
+	lines := strings.Split(text, "\n")
+	utf16Hex := func(s string) string {
+		var b strings.Builder
+		b.WriteString("FEFF")
+		for _, r := range s {
+			b.WriteString(fmt.Sprintf("%04X", r))
+		}
+		return b.String()
+	}
 	var content strings.Builder
-	content.WriteString("BT /F1 10 Tf 50 790 Td 12 TL ")
+	content.WriteString("BT /F1 10 Tf 50 790 Td 14 TL ")
 	for i, line := range lines {
 		if i > 0 {
 			content.WriteString("T* ")
 		}
-		content.WriteString("(" + line + ") Tj ")
+		content.WriteString("<" + utf16Hex(line) + "> Tj ")
 	}
 	content.WriteString("ET")
 	stream := content.String()
@@ -319,7 +379,9 @@ func buildSimplePDF(text string) []byte {
 		"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
 		"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
 		fmt.Sprintf("4 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n", len(stream), stream),
-		"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+		"5 0 obj\n<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [6 0 R] >>\nendobj\n",
+		"6 0 obj\n<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor 7 0 R >>\nendobj\n",
+		"7 0 obj\n<< /Type /FontDescriptor /FontName /STSong-Light /Flags 4 /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>\nendobj\n",
 	}
 	var b strings.Builder
 	b.WriteString("%PDF-1.4\n")
@@ -329,12 +391,77 @@ func buildSimplePDF(text string) []byte {
 		b.WriteString(obj)
 	}
 	xrefStart := b.Len()
-	b.WriteString("xref\n0 6\n")
+	b.WriteString("xref\n0 8\n")
 	b.WriteString("0000000000 65535 f \n")
-	for i := 1; i <= 5; i++ {
+	for i := 1; i <= 7; i++ {
 		b.WriteString(fmt.Sprintf("%010d 00000 n \n", offsets[i]))
 	}
-	b.WriteString("trailer\n<< /Size 6 /Root 1 0 R >>\n")
+	b.WriteString("trailer\n<< /Size 8 /Root 1 0 R >>\n")
 	b.WriteString(fmt.Sprintf("startxref\n%d\n%%%%EOF", xrefStart))
 	return []byte(b.String())
+}
+
+func (s *Server) handleAdminAuditLogsRoot(w http.ResponseWriter, r *http.Request) {
+	claims, err := requireRole(r, "admin")
+	if err != nil {
+		writeAuthOrForbidden(w, r, err)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	fromTS, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("from_ts")), 10, 64)
+	toTS, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("to_ts")), 10, 64)
+
+	items, err := s.store.ListAuditLogsGlobal(
+		r.URL.Query().Get("actor"),
+		r.URL.Query().Get("module"),
+		fromTS,
+		toTS,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	_ = claims
+	writeJSON(w, map[string]any{"audit_logs": items})
+}
+
+func (s *Server) handleAdminAuditLogsSub(w http.ResponseWriter, r *http.Request) {
+	claims, err := requireRole(r, "admin")
+	if err != nil {
+		writeAuthOrForbidden(w, r, err)
+		return
+	}
+	_ = claims
+	rest := strings.TrimPrefix(r.URL.Path, "/api/admin/audit_logs/")
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		http.NotFound(w, r)
+		return
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid audit id", http.StatusBadRequest)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	item, err := s.store.GetAuditLogByID(id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{"audit_log": item})
 }

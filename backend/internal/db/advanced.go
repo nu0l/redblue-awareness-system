@@ -89,11 +89,20 @@ func (s *Store) ListMatchTemplates() ([]MatchTemplate, error) {
 	for rows.Next() {
 		var item MatchTemplate
 		var citiesJSON, typesJSON string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Version, &item.MapType, &citiesJSON, &typesJSON, &item.AudioConfig, &item.ScoreRules, &item.ChangeLog, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var audioJSON, scoreJSON string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Version, &item.MapType, &citiesJSON, &typesJSON, &audioJSON, &scoreJSON, &item.ChangeLog, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(citiesJSON), &item.Cities)
 		_ = json.Unmarshal([]byte(typesJSON), &item.AttackTypes)
+		if strings.TrimSpace(audioJSON) == "" {
+			audioJSON = "{}"
+		}
+		if strings.TrimSpace(scoreJSON) == "" {
+			scoreJSON = "{}"
+		}
+		item.AudioConfig = json.RawMessage(audioJSON)
+		item.ScoreRules = json.RawMessage(scoreJSON)
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -129,12 +138,21 @@ name=excluded.name,version=excluded.version,map_type=excluded.map_type,cities_js
 func (s *Store) GetMatchTemplate(id string) (*MatchTemplate, error) {
 	var item MatchTemplate
 	var citiesJSON, typesJSON string
+	var audioJSON, scoreJSON string
 	if err := s.db.QueryRow(`SELECT id, name, version, map_type, cities_json, attack_types_json, audio_config_json, score_rules_json, change_log, created_at, updated_at FROM match_templates WHERE id=?`, id).
-		Scan(&item.ID, &item.Name, &item.Version, &item.MapType, &citiesJSON, &typesJSON, &item.AudioConfig, &item.ScoreRules, &item.ChangeLog, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		Scan(&item.ID, &item.Name, &item.Version, &item.MapType, &citiesJSON, &typesJSON, &audioJSON, &scoreJSON, &item.ChangeLog, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal([]byte(citiesJSON), &item.Cities)
 	_ = json.Unmarshal([]byte(typesJSON), &item.AttackTypes)
+	if strings.TrimSpace(audioJSON) == "" {
+		audioJSON = "{}"
+	}
+	if strings.TrimSpace(scoreJSON) == "" {
+		scoreJSON = "{}"
+	}
+	item.AudioConfig = json.RawMessage(audioJSON)
+	item.ScoreRules = json.RawMessage(scoreJSON)
 	return &item, nil
 }
 
@@ -253,9 +271,11 @@ func (s *Store) ListScoreTrend(matchID string) ([]TrendPoint, error) {
 
 func (s *Store) ListTrendsByDimension(matchID string) (map[string][]TrendPoint, error) {
 	out := map[string][]TrendPoint{
-		"team":   {},
-		"tactic": {},
-		"round":  {},
+		"team":        {},
+		"tactic":      {},
+		"round":       {},
+		"status":      {},
+		"target_city": {},
 	}
 	teamRows, err := s.db.Query(`SELECT type, COALESCE(SUM(score),0) FROM teams WHERE match_id=? GROUP BY type`, matchID)
 	if err != nil {
@@ -282,6 +302,32 @@ func (s *Store) ListTrendsByDimension(matchID string) (map[string][]TrendPoint, 
 		}
 	}
 	_ = tacticRows.Close()
+
+	statusRows, err := s.db.Query(`SELECT COALESCE(json_extract(payload_json, '$.status'), ''), COUNT(1) FROM events WHERE match_id=? AND event_type='attack_success' GROUP BY 1 ORDER BY COUNT(1) DESC`, matchID)
+	if err != nil {
+		return out, err
+	}
+	for statusRows.Next() {
+		var k string
+		var v float64
+		if err := statusRows.Scan(&k, &v); err == nil && strings.TrimSpace(k) != "" {
+			out["status"] = append(out["status"], TrendPoint{Key: k, Value: v})
+		}
+	}
+	_ = statusRows.Close()
+
+	cityRows, err := s.db.Query(`SELECT COALESCE(json_extract(payload_json, '$.target_city'), ''), COUNT(1) FROM events WHERE match_id=? AND event_type='attack_success' GROUP BY 1 ORDER BY COUNT(1) DESC LIMIT 20`, matchID)
+	if err != nil {
+		return out, err
+	}
+	for cityRows.Next() {
+		var k string
+		var v float64
+		if err := cityRows.Scan(&k, &v); err == nil && strings.TrimSpace(k) != "" {
+			out["target_city"] = append(out["target_city"], TrendPoint{Key: k, Value: v})
+		}
+	}
+	_ = cityRows.Close()
 
 	roundRows, err := s.db.Query(`SELECT ((seq-1)/20)+1 AS round_bucket, COUNT(1) FROM events WHERE match_id=? GROUP BY round_bucket ORDER BY round_bucket ASC`, matchID)
 	if err != nil {
@@ -337,6 +383,55 @@ func (s *Store) ListAuditLogs(matchID, actor, module string, fromTS, toTS int64)
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ListAuditLogsGlobal(actor, module string, fromTS, toTS int64) ([]AuditLog, error) {
+	query := `SELECT id, match_id, actor, role, module, action, before_json, after_json, created_at FROM audit_logs WHERE 1=1`
+	args := []any{}
+	if strings.TrimSpace(actor) != "" {
+		query += ` AND actor=?`
+		args = append(args, actor)
+	}
+	if strings.TrimSpace(module) != "" {
+		query += ` AND module=?`
+		args = append(args, module)
+	}
+	if fromTS > 0 {
+		query += ` AND created_at>=?`
+		args = append(args, fromTS)
+	}
+	if toTS > 0 {
+		query += ` AND created_at<=?`
+		args = append(args, toTS)
+	}
+	query += ` ORDER BY created_at DESC, id DESC LIMIT 500`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]AuditLog, 0)
+	for rows.Next() {
+		var a AuditLog
+		if err := rows.Scan(&a.ID, &a.MatchID, &a.Actor, &a.Role, &a.Module, &a.Action, &a.Before, &a.After, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetAuditLogByID(id int64) (*AuditLog, error) {
+	var a AuditLog
+	if err := s.db.QueryRow(
+		`SELECT id, match_id, actor, role, module, action, before_json, after_json, created_at FROM audit_logs WHERE id=?`,
+		id,
+	).Scan(&a.ID, &a.MatchID, &a.Actor, &a.Role, &a.Module, &a.Action, &a.Before, &a.After, &a.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &a, nil
 }
 
 func (s *Store) ListEventsEnhanced(matchID string, fromSeq uint64, filter EventFilter) ([]EventRecord, error) {

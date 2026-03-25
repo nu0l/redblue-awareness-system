@@ -1,5 +1,7 @@
 <template>
   <div class="screen-root" :style="screenRootStyle">
+    <div class="crt-overlay"></div>
+    
     <header class="topbar">
       <div class="topbar-left">
         <div
@@ -22,12 +24,26 @@
       </div>
 
       <div class="topbar-right">
-        <div class="topbar-clock font-cyber">
-          <div class="topbar-date">{{ dateStr }}</div>
-          <div class="topbar-time">{{ clock }}</div>
+        <div v-if="countdownText" class="topbar-countdown font-cyber">
+          <div class="countdown-icon"></div>
+          <div class="countdown-content">
+            <div class="countdown-label">EXERCISE COUNTDOWN</div>
+            <div class="countdown-value">{{ countdownText }}</div>
+          </div>
         </div>
-        <div class="topbar-bar-mini"></div>
-        <div class="topbar-bar"></div>
+
+        <div class="divider-line"></div>
+
+        <div class="topbar-clock font-cyber">
+          <div class="topbar-time">{{ clock }}</div>
+          <div class="topbar-date">{{ dateStr }}</div>
+        </div>
+
+        <div class="signal-bars">
+          <div class="topbar-bar-mini"></div>
+          <div class="topbar-bar"></div>
+          <div class="topbar-bar-mini delayed"></div>
+        </div>
       </div>
     </header>
 
@@ -64,27 +80,26 @@
                 v-for="(team, idx) in leaderboardWindow"
                 :key="`${team.id}-${idx}`"
                 class="leader-item"
+                :data-rank="getTeamRank(team.id)"
               >
-              <div class="leader-left">
-                <span
-                  class="leader-rank font-cyber"
-                  :class="getTeamRank(team.id) <= 3 ? 'rank-top' : 'rank-rest'"
-                  >#{{ getTeamRank(team.id) }}</span
+                <div class="leader-left">
+                  <span class="leader-rank font-cyber" :data-rank="getTeamRank(team.id)">
+                    #{{ getTeamRank(team.id) }}
+                  </span>
+                  <span class="leader-name" :class="team.type === 'red' ? 'name-red' : 'name-blue'">
+                    {{ team.name }}
+                  </span>
+                </div>
+                <div
+                  class="leader-score font-cyber"
+                  :class="[
+                    team.type === 'red' ? 'score-red' : 'score-blue',
+                    scorePulse[team.id] ? 'score-pulse' : ''
+                  ]"
                 >
-                <span class="leader-name" :class="team.type === 'red' ? 'name-red' : 'name-blue'">
-                  {{ team.name }}
-                </span>
+                  {{ team.score.toLocaleString() }}
+                </div>
               </div>
-              <div
-                class="leader-score font-cyber"
-                :class="[
-                  team.type === 'red' ? 'score-red' : 'score-blue',
-                  scorePulse[team.id] ? 'score-pulse' : ''
-                ]"
-              >
-                {{ team.score.toLocaleString() }}
-              </div>
-            </div>
             </div>
           </div>
         </div>
@@ -336,6 +351,7 @@ if (jwtToken) {
 
 const dateStr = ref("YYYY-MM-DD");
 const clock = ref("00:00:00");
+const nowTS = ref(Math.floor(Date.now() / 1000));
 let clockTimer: number | undefined;
 
 const wsConnected = ref(false);
@@ -690,6 +706,16 @@ function pulseTeamScore(teamId: number) {
 
 // 大屏默认不展示回放控制台（回放仍可通过 admin 下发控制事件工作）。
 const showReplayUI = computed(() => false);
+const countdownText = computed(() => {
+  const end = Number(state.countdown_end_ts ?? 0);
+  if (!Number.isFinite(end) || end <= 0) return "";
+  const diff = end - nowTS.value;
+  if (diff <= 0) return "00:00:00";
+  const h = Math.floor(diff / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  const s = diff % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+});
 
 async function setMapMode(mode: "china" | "taizhou") {
   if (!matchId) return;
@@ -722,6 +748,7 @@ const state = reactive<MatchStateDTO>({
   bgm_enabled: false,
   success_sfx_url: "",
   success_sfx_enabled: false,
+  countdown_end_ts: 0,
   map_type: "china",
   leaderboard_visible: true,
   teams: [],
@@ -1168,7 +1195,6 @@ function updateRadar(teams: TeamDTO[]) {
   // 0 漏洞挖掘 / 1 内网渗透 / 2 权限维持 / 3 隐蔽穿透 / 4 情报搜集 / 5 响应速度
   const dimIndexByAttackType: Record<string, number> = {
     // 漏洞挖掘（Web 漏洞利用）
-    "Weblogic反序列化": 0,
     "反序列化漏洞": 0,
     "SQL盲注": 0,
     "SQL注入(盲注/报错注入)": 0,
@@ -1743,11 +1769,21 @@ function refreshMapSeriesOnly(mapType: "china" | "taizhou") {
 }
 
 async function loadMapData(mapType: "china" | "taizhou") {
+  const localUrl = mapType === "taizhou" ? `/geojson/${mapType}.json` : "";
   const url = `${apiBaseHttp}/api/geojson/${mapType}`;
   try {
-    const res = await fetch(url, { headers: authHeaders });
-    if (!res.ok) throw new Error(`geojson proxy status=${res.status}`);
-    const geoJson = await res.json();
+    let geoJson: any = null;
+    if (localUrl) {
+      const localRes = await fetch(localUrl);
+      if (localRes.ok) {
+        geoJson = await localRes.json();
+      }
+    }
+    if (!geoJson) {
+      const res = await fetch(url, { headers: authHeaders });
+      if (!res.ok) throw new Error(`geojson proxy status=${res.status}`);
+      geoJson = await res.json();
+    }
     echarts.registerMap(mapType, geoJson);
     mapLineEntries = [];
     mapHitMarkers = [];
@@ -2199,6 +2235,7 @@ onMounted(async () => {
 
   clockTimer = window.setInterval(() => {
     const now = new Date();
+    nowTS.value = Math.floor(now.getTime() / 1000);
     clock.value = now.toLocaleTimeString("en-US", { hour12: false });
     const y = now.getFullYear();
     const m = String(now.getMonth() + 1).padStart(2, "0");
@@ -2524,6 +2561,27 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   gap: 2px;
 }
+.topbar-countdown {
+  margin-right: 12px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.countdown-label {
+  font-size: calc(10px * var(--ui-scale) * var(--font-user, 1));
+  letter-spacing: 0.12em;
+  opacity: 0.9;
+}
+.countdown-value {
+  font-size: calc(16px * var(--ui-scale) * var(--font-user, 1));
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
 
 .topbar-date {
   font-size: calc(12px * var(--ui-scale) * var(--font-user, 1));
@@ -2739,33 +2797,158 @@ onBeforeUnmount(() => {
 .terminal-track.anim {
   transition: transform 0.52s ease;
 }
+/* ==========================================
+   🏆 战队实时得分榜：赛博徽章与动态悬浮系统
+========================================== */
 
+/* 基础项：暗黑科幻背景与过渡动画 */
 .leader-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: calc(8px * var(--ui-scale)) calc(10px * var(--ui-scale));
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 6px;
-  border: 1px solid rgba(0, 243, 255, 0.08);
+  padding: calc(10px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  background: linear-gradient(90deg, rgba(3, 11, 26, 0.8) 0%, rgba(2, 6, 23, 0.9) 100%);
+  border-radius: 4px;
+  border: 1px solid rgba(0, 243, 255, 0.05);
+  border-left: 4px solid rgba(0, 243, 255, 0.3); /* 默认左侧指示条 */
   margin-bottom: calc(10px * var(--ui-scale));
-  transition: transform 0.3s ease, opacity 0.3s ease, box-shadow 0.3s ease;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 交互：每一行增加悬浮时的高亮呼吸边框与位移 */
+.leader-item:hover {
+  transform: translateX(8px) scale(1.02); /* 向右浮出并微缩放 */
+  background: linear-gradient(90deg, rgba(0, 243, 255, 0.15) 0%, rgba(2, 6, 23, 0.9) 100%);
+  border-color: rgba(0, 243, 255, 0.6);
+  border-left: 4px solid #00f3ff;
+  box-shadow: 0 0 15px rgba(0, 243, 255, 0.4), inset 0 0 10px rgba(0, 243, 255, 0.2);
+  z-index: 10;
+}
+
+/* 特效：鼠标悬浮时增加快速扫光动效 */
+.leader-item::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 50%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  transform: skewX(-20deg);
+  transition: 0.5s;
+}
+.leader-item:hover::after {
+  left: 150%;
+}
+
+/* 名次文本基础设置 */
+.leader-rank {
+  width: calc(32px * var(--ui-scale));
+  text-align: center;
+  font-size: calc(15px * var(--ui-scale) * var(--font-user, 1));
+  font-weight: 900;
+  color: rgba(229, 231, 235, 0.4); /* 4名以后的灰暗色 */
+  transition: all 0.3s ease;
+}
+/* ==========================================
+   追加：前三名奖杯 🏆 视觉装饰系统
+========================================== */
+
+/* 1. 调整名次文本容器的布局，容纳奖杯并左对齐 */
+.leader-rank {
+  display: flex !important; /* 强制启用 flex */
+  align-items: center;
+  justify-content: flex-start !important; /* 修改为靠左对齐 */
+  width: calc(75px * var(--ui-scale)); /* 稍微加宽一点名次列，给奖杯留空间 */
+  gap: calc(2px * var(--ui-scale)); /* 奖杯与#数字的间距 */
+  text-align: left !important;
+  /* 保留您文件里原有的字体大小、颜色等定义 */
+}
+
+/* 2. 定义前三名名次前的奖杯样式 (通用的发光与旋转) */
+.leader-rank[data-rank="1"]::before,
+.leader-rank[data-rank="2"]::before,
+.leader-rank[data-rank="3"]::before {
+  content: '🏆';
+  display: inline-block;
+  font-size: 1.1em; /* 奖杯比文字略大 */
+  font-family: sans-serif; /* 确保在所有设备上正确渲染 emoji */
+  /* 让奖杯也有动态浮动的赛博感 */
+  animation: trophy-wobble 2.5s infinite ease-in-out alternate;
+  will-change: transform;
+}
+
+/* 3. 分别定义前三名奖杯的专属 Neon Glow (光晕) 效果 */
+
+/* 🥇 TOP 1 Gold Glow */
+.leader-rank[data-rank="1"]::before {
+  filter: drop-shadow(0 0 calc(8px * var(--ui-scale)) #ffd700);
+}
+
+/* 🥈 TOP 2 Platinum Glow */
+.leader-rank[data-rank="2"]::before {
+  filter: drop-shadow(0 0 calc(6px * var(--ui-scale)) #c0c0c0);
+}
+
+/* 🥉 TOP 3 Copper Glow */
+.leader-rank[data-rank="3"]::before {
+  filter: drop-shadow(0 0 calc(5px * var(--ui-scale)) #ff8c00);
+}
+
+/* 4. 定义奖杯微幅浮动动画，增加灵动感 */
+@keyframes trophy-wobble {
+  0% { transform: scale(1) rotate(-5deg); }
+  50% { transform: scale(1.05) rotate(5deg); }
+  100% { transform: scale(1) rotate(-5deg); }
+}
+/* 🥇 TOP 1: 纯金发光徽章特效 */
+.leader-item[data-rank="1"] {
+  border-left-color: #ffd700;
+  background: linear-gradient(90deg, rgba(255, 215, 0, 0.15) 0%, rgba(2, 6, 23, 0.9) 100%);
+}
+.leader-item[data-rank="1"]:hover {
+  border-color: #ffd700;
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.5), inset 0 0 10px rgba(255, 215, 0, 0.2);
+}
+.leader-rank[data-rank="1"] {
+  color: #ffd700;
+  text-shadow: 0 0 12px #ffd700, 0 0 25px rgba(255, 215, 0, 0.8);
+  font-size: calc(20px * var(--ui-scale) * var(--font-user, 1));
+}
+
+/* 🥈 TOP 2: 铂金/银色发光徽章特效 */
+.leader-item[data-rank="2"] {
+  border-left-color: #c0c0c0;
+  background: linear-gradient(90deg, rgba(192, 192, 192, 0.1) 0%, rgba(2, 6, 23, 0.9) 100%);
+}
+.leader-item[data-rank="2"]:hover {
+  border-color: #c0c0c0;
+  box-shadow: 0 0 15px rgba(192, 192, 192, 0.5), inset 0 0 10px rgba(192, 192, 192, 0.2);
+}
+.leader-rank[data-rank="2"] {
+  color: #e2e8f0;
+  text-shadow: 0 0 10px #c0c0c0, 0 0 15px rgba(192, 192, 192, 0.6);
+  font-size: calc(18px * var(--ui-scale) * var(--font-user, 1));
+}
+
+/* 🥉 TOP 3: 亮橙/铜色发光徽章特效 */
+.leader-item[data-rank="3"] {
+  border-left-color: #ff8c00;
+  background: linear-gradient(90deg, rgba(255, 140, 0, 0.1) 0%, rgba(2, 6, 23, 0.9) 100%);
+}
+.leader-item[data-rank="3"]:hover {
+  border-color: #ff8c00;
+  box-shadow: 0 0 15px rgba(255, 140, 0, 0.5), inset 0 0 10px rgba(255, 140, 0, 0.2);
+}
+.leader-rank[data-rank="3"] {
+  color: #ffb84d;
+  text-shadow: 0 0 10px #ff8c00, 0 0 20px rgba(255, 140, 0, 0.6);
+  font-size: calc(17px * var(--ui-scale) * var(--font-user, 1));
 }
 .leader-left {
   display: flex;
   align-items: center;
   gap: calc(12px * var(--ui-scale));
-}
-.leader-rank {
-  width: calc(26px * var(--ui-scale));
-  text-align: center;
-  font-size: calc(16px * var(--ui-scale) * var(--font-user, 1));
-}
-.rank-top {
-  color: var(--neon-yellow);
-}
-.rank-rest {
-  color: rgba(229, 231, 235, 0.6);
 }
 .leader-logo {
   font-size: 26px;
@@ -3158,35 +3341,68 @@ onBeforeUnmount(() => {
   border-width: 0 2px 2px 0;
 }
 
+/* ==========================================
+   💻 实时战况日志：黑客 CRT 终端扫描特效
+========================================== */
+
+/* 1. 终端容器：极暗底色 + 内部发光 + 绿色扫描线遮罩 */
 .terminal-logs {
   height: calc(100% - 54px);
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(0, 243, 255, 0.08);
-  padding: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
-  color: #34d399;
-}
-.log-line {
-  margin-bottom: 6px;
-  opacity: 0.95;
-  font-size: calc(13px * var(--ui-scale) * var(--font-user, 1));
+  /* 极暗底色配合内发光，制造屏幕景深 */
+  background: rgba(1, 8, 16, 0.9) !important;
+  border: 1px solid rgba(0, 255, 170, 0.2) !important;
+  box-shadow: inset 0 0 30px rgba(0, 255, 170, 0.05), 0 0 15px rgba(0, 255, 170, 0.1) !important;
+  padding: 12px !important;
+  /* 专属的终端横向扫描线背景叠加 */
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(0, 255, 170, 0.04),
+    rgba(0, 255, 170, 0.04) 1px,
+    transparent 1px,
+    transparent 3px
+  ) !important;
 }
 
+/* 2. 终端单行文本：硬核等宽字体与微闪动特效 */
+.log-line {
+  font-family: 'Courier New', Courier, 'Roboto Mono', monospace !important;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  line-height: 1.6;
+  margin-bottom: 6px;
+  /* 挂载文字随机闪烁感动画 */
+  animation: text-flicker 5s infinite normal ease-in-out; 
+}
+
+/* 3. CRT 文字闪烁关键帧 */
+@keyframes text-flicker {
+  0%   { opacity: 0.95; }
+  48%  { opacity: 0.95; }
+  50%  { opacity: 0.6;  } /* 偶尔闪亮或暗淡一次 */
+  52%  { opacity: 1;    }
+  100% { opacity: 0.95; }
+}
+
+/* 4. 重新定义高对比度日志颜色与强烈文字外发光 */
 .log-system {
-  color: #34d399;
-  text-shadow: 0 0 10px rgba(52, 211, 153, 0.2);
+  color: #00ffaa !important; /* 骇客电子绿 */
+  text-shadow: 0 0 8px rgba(0, 255, 170, 0.6) !important;
 }
+
 .log-judge {
-  color: #fbbf24;
-  text-shadow: 0 0 10px rgba(251, 191, 36, 0.15);
+  color: #fffc00 !important; /* 裁判干预：霓虹黄 */
+  text-shadow: 0 0 8px rgba(255, 252, 0, 0.6) !important;
 }
+
 .log-event {
-  color: #22d3ee;
+  color: #ff0055 !important; /* 攻击事件：高亮警示红（原为平淡青色） */
+  text-shadow: 0 0 8px rgba(255, 0, 85, 0.6) !important;
 }
+
 .log-normal {
-  color: #e5e7eb;
+  color: #00f3ff !important; /* 目标与普通文本：高亮青色 */
+  text-shadow: 0 0 6px rgba(0, 243, 255, 0.4) !important;
 }
 
 .pie-chart {
@@ -3250,5 +3466,141 @@ onBeforeUnmount(() => {
     display: none;
   }
 }
+
+/* ==========================================
+   🚀 视觉大改版：赛博朋克与指挥舱特效追加
+========================================== */
+
+/* 1. 全局背景强化：加入暗色网格与深蓝环境光 */
+.screen-root {
+  background-color: #020617; /* 极暗的蓝灰底色 */
+  background-image: 
+    radial-gradient(circle at 50% 50%, rgba(14, 38, 74, 0.4) 0%, rgba(2, 6, 23, 1) 80%),
+    linear-gradient(rgba(0, 243, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 243, 255, 0.03) 1px, transparent 1px);
+  background-size: 100% 100%, 30px 30px, 30px 30px;
+  background-position: center center;
+}
+
+/* 2. 左右数据面板：切角边框与内发光 (替代原本的 cyber-panel) */
+.cyber-panel {
+  background: rgba(3, 11, 26, 0.65);
+  border: 1px solid rgba(0, 243, 255, 0.15);
+  box-shadow: inset 0 0 20px rgba(0, 243, 255, 0.05), 0 4px 12px rgba(0, 0, 0, 0.5);
+  position: relative;
+  /* 左上和右下切角设计 */
+  clip-path: polygon(
+    15px 0, 100% 0, 
+    100% calc(100% - 15px), calc(100% - 15px) 100%, 
+    0 100%, 0 15px
+  );
+  backdrop-filter: blur(4px);
+}
+/* 给面板四个角增加高亮瞄准星修饰 */
+.cyber-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 2px solid transparent;
+  background: linear-gradient(135deg, #00f3ff 10px, transparent 10px) top left,
+              linear-gradient(-135deg, #00f3ff 10px, transparent 10px) top right,
+              linear-gradient(45deg, #00f3ff 10px, transparent 10px) bottom left,
+              linear-gradient(-45deg, #00f3ff 10px, transparent 10px) bottom right;
+  background-size: 50% 50%;
+  background-repeat: no-repeat;
+  opacity: 0.6;
+}
+
+/* 3. 顶部标题霓虹发光优化 */
+.topbar-title.glow-text {
+  text-shadow: 0 0 10px rgba(0, 243, 255, 0.6), 0 0 20px rgba(0, 243, 255, 0.4), 0 0 30px rgba(0, 243, 255, 0.2);
+  background: linear-gradient(to bottom, #ffffff, #82e9ff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* 4. 右上角战术时钟专属样式 */
+.topbar-right {
+  gap: 15px;
+}
+.topbar-countdown {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 42, 42, 0.1);
+  border: 1px solid rgba(255, 42, 42, 0.3);
+  padding: 6px 16px;
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  box-shadow: inset 0 0 15px rgba(255, 42, 42, 0.15);
+}
+.countdown-icon {
+  width: 10px;
+  height: 10px;
+  background-color: #ff2a2a;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #ff2a2a;
+  animation: pulse-red 1.2s infinite;
+}
+.countdown-content {
+  display: flex;
+  flex-direction: column;
+}
+.countdown-label {
+  font-size: calc(10px * var(--ui-scale));
+  color: #ff8b8b;
+  letter-spacing: 1.5px;
+}
+.countdown-value {
+  font-size: calc(18px * var(--ui-scale));
+  color: #ff2a2a;
+  text-shadow: 0 0 8px rgba(255, 42, 42, 0.8);
+}
+.divider-line {
+  width: 2px;
+  height: 35px;
+  background: linear-gradient(to bottom, transparent, rgba(0, 243, 255, 0.8), transparent);
+  transform: skewX(-15deg);
+  margin: 0 10px;
+}
+.signal-bars {
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+  height: 28px;
+  margin-left: 5px;
+}
+.signal-bars .topbar-bar,
+.signal-bars .topbar-bar-mini {
+  background-color: #00f3ff;
+  box-shadow: 0 0 8px #00f3ff;
+  width: 4px;
+}
+.signal-bars .topbar-bar {
+  animation: scan 1.8s infinite ease-in-out alternate;
+}
+.signal-bars .topbar-bar-mini {
+  animation: scan 1.2s infinite ease-in-out alternate;
+}
+.signal-bars .topbar-bar-mini.delayed {
+  animation-delay: 0.6s;
+}
+
+/* 5. 关键帧动画定义 */
+@keyframes pulse-red {
+  0% { transform: scale(0.85); opacity: 0.5; box-shadow: 0 0 0 0 rgba(255, 42, 42, 0.6); }
+  70% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 0 6px rgba(255, 42, 42, 0); }
+  100% { transform: scale(0.85); opacity: 0.5; box-shadow: 0 0 0 0 rgba(255, 42, 42, 0); }
+}
+@keyframes scan {
+  0% { height: 20%; opacity: 0.3; }
+  100% { height: 100%; opacity: 1; }
+}
+
+/* 6. 覆盖原有的字体定义，强化电竞/科技感 */
+.font-cyber {
+  font-family: 'Rajdhani', 'Orbitron', 'Roboto Mono', monospace;
+}
+
 </style>
 

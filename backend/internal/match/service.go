@@ -10,6 +10,7 @@ import (
 
 	"redblue-server/internal/db"
 	"redblue-server/internal/protocol"
+	"redblue-server/internal/ws"
 )
 
 type MatchRuntime struct {
@@ -20,6 +21,11 @@ type MatchRuntime struct {
 	MapType           string
 	LeaderboardVisible bool
 	Panels            map[string]bool
+	CountdownEndTS    int64
+	CountdownBroadcastMsg   string
+	CountdownTogglePanelID  string
+	CountdownToggleVisible  bool
+	CountdownTriggered      bool
 	ScreenTitle       string
 	ScreenOrganizer   string
 	ScreenSupporter   string
@@ -38,16 +44,22 @@ type MatchRuntime struct {
 
 type Service struct {
 	store *db.Store
+	hub   *ws.Hub
 
 	// matches runtime cache: 用于减少频繁从 DB 拉取的开销。
 	cacheMu sync.Mutex
 	cache   map[string]*MatchRuntime
+
+	countdownMu     sync.Mutex
+	countdownTimers map[string]*time.Timer
 }
 
-func NewService(store *db.Store) *Service {
+func NewService(store *db.Store, hub *ws.Hub) *Service {
 	return &Service{
 		store: store,
+		hub:   hub,
 		cache: make(map[string]*MatchRuntime),
+		countdownTimers: make(map[string]*time.Timer),
 	}
 }
 
@@ -58,6 +70,116 @@ func (s *Service) InvalidateCache(matchID string) {
 	s.cacheMu.Unlock()
 }
 
+func (s *Service) cancelCountdownTimer(matchID string) {
+	s.countdownMu.Lock()
+	if t, ok := s.countdownTimers[matchID]; ok && t != nil {
+		t.Stop()
+		delete(s.countdownTimers, matchID)
+	}
+	s.countdownMu.Unlock()
+}
+
+// jsonStringEscape 返回 JSON 字符串片段（已包含引号），用于拼接 RawMessage。
+func jsonStringEscape(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func (s *Service) ensureCountdownTimer(matchID string, endTS int64, broadcastMsg string, togglePanelID string, toggleVisible bool, triggered bool) {
+	if endTS <= 0 || triggered {
+		s.cancelCountdownTimer(matchID)
+		return
+	}
+	delay := time.Until(time.Unix(endTS, 0))
+	if delay < 0 {
+		delay = 0
+	}
+
+	s.cancelCountdownTimer(matchID)
+	timer := time.AfterFunc(delay, func() {
+		// CAS：只有“仍然是这个 endTS 且未触发”的配置才能真正触发。
+		ok, err := s.store.TryTriggerCountdown(matchID, endTS)
+		if err != nil || !ok {
+			return
+		}
+
+		beforeState, _ := s.GetStateDTO(matchID)
+		beforeJSON := ""
+		if beforeState != nil {
+			if b, e := json.Marshal(beforeState); e == nil {
+				beforeJSON = string(b)
+			}
+		}
+
+		// 1) 广播通知
+		if strings.TrimSpace(broadcastMsg) != "" {
+			wsMsg, err := s.ApplyCommand(matchID, CmdMessage{
+				EventType: "system_broadcast",
+				Data:      json.RawMessage(`{"message":` + jsonStringEscape(broadcastMsg) + `}`),
+			})
+			if err == nil && wsMsg != nil && s.hub != nil {
+				s.hub.Broadcast(matchID, *wsMsg)
+				afterJSON := ""
+				if wsMsg.State != nil {
+					if b, e := json.Marshal(wsMsg.State); e == nil {
+						afterJSON = string(b)
+					}
+				}
+				_ = s.store.CreateAuditLog(db.AuditLog{
+					MatchID: matchID,
+					Actor:   "system",
+					Role:    "system",
+					Module:  "countdown",
+					Action:  "trigger_system_broadcast",
+					Before:  beforeJSON,
+					After:   afterJSON,
+				})
+			}
+		}
+
+		// 2) 切换面板
+		if strings.TrimSpace(togglePanelID) != "" {
+			beforeState2, _ := s.GetStateDTO(matchID)
+			beforeJSON2 := beforeJSON
+			if beforeState2 != nil {
+				if b, e := json.Marshal(beforeState2); e == nil {
+					beforeJSON2 = string(b)
+				}
+			}
+
+			wsMsg, err := s.ApplyCommand(matchID, CmdMessage{
+				EventType: "toggle_panel",
+				Data: func() json.RawMessage {
+					b, _ := json.Marshal(map[string]any{"panel_id": togglePanelID, "visible": toggleVisible})
+					return json.RawMessage(b)
+				}(),
+			})
+			if err == nil && wsMsg != nil && s.hub != nil {
+				s.hub.Broadcast(matchID, *wsMsg)
+				afterJSON := ""
+				if wsMsg.State != nil {
+					if b, e := json.Marshal(wsMsg.State); e == nil {
+						afterJSON = string(b)
+					}
+				}
+				_ = s.store.CreateAuditLog(db.AuditLog{
+					MatchID: matchID,
+					Actor:   "system",
+					Role:    "system",
+					Module:  "countdown",
+					Action:  "trigger_toggle_panel",
+					Before:  beforeJSON2,
+					After:   afterJSON,
+				})
+			}
+		}
+	})
+
+	s.countdownMu.Lock()
+	s.countdownTimers[matchID] = timer
+	s.countdownMu.Unlock()
+}
+
 func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
@@ -65,7 +187,24 @@ func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 		return rt, nil
 	}
 
-	mapType, leaderboardVisible, panels, screenTitle, screenOrganizer, screenSupporter, leaderboardBG, bgmURL, bgmEnabled, successSFXURL, successSFXEnabled, leaderboardMainAlpha, err := s.store.GetMatchPanels(matchID)
+	mapType,
+		leaderboardVisible,
+		panels,
+		countdownEndTS,
+		countdownBroadcastMsg,
+		countdownTogglePanelID,
+		countdownToggleVisible,
+		countdownTriggered,
+		screenTitle,
+		screenOrganizer,
+		screenSupporter,
+		leaderboardBG,
+		bgmURL,
+		bgmEnabled,
+		successSFXURL,
+		successSFXEnabled,
+		leaderboardMainAlpha,
+		err := s.store.GetMatchPanels(matchID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +242,11 @@ func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 		MapType:            mapType,
 		LeaderboardVisible: leaderboardVisible,
 		Panels:             panels,
+		CountdownEndTS:     countdownEndTS,
+		CountdownBroadcastMsg:  countdownBroadcastMsg,
+		CountdownTogglePanelID: countdownTogglePanelID,
+		CountdownToggleVisible: countdownToggleVisible,
+		CountdownTriggered:     countdownTriggered,
 		ScreenTitle:        screenTitle,
 		ScreenOrganizer:    screenOrganizer,
 		ScreenSupporter:    screenSupporter,
@@ -121,6 +265,15 @@ func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 			"panel-leaderboard": rt.LeaderboardVisible,
 		}
 	}
+
+	s.ensureCountdownTimer(
+		matchID,
+		rt.CountdownEndTS,
+		rt.CountdownBroadcastMsg,
+		rt.CountdownTogglePanelID,
+		rt.CountdownToggleVisible,
+		rt.CountdownTriggered,
+	)
 	return rt, nil
 }
 
@@ -134,10 +287,27 @@ func (s *Service) GetStateDTO(matchID string) (*protocol.MatchStateDTO, error) {
 	return runtimeToStateDTO(rt), nil
 }
 
-// GetInitialStateDTO 用于历史复盘：从 match 创建时的“初始配置 + 初始比分”开始，
-// 再按事件序列回放，从而保证 scoreboard 可复现。
+	// GetInitialStateDTO 用于历史复盘：从 match 创建时的“初始配置 + 初始比分”开始，
+	// 再按事件序列回放，从而保证 scoreboard 可复现。
 func (s *Service) GetInitialStateDTO(matchID string) (*protocol.MatchStateDTO, error) {
-	initMapType, initLeaderboardVisible, initPanels, screenTitle, initOrganizer, initSupporter, initLeaderboardBG, initBGMURL, initBGMEnabled, initSuccessSFXURL, initSuccessSFXEnabled, initLeaderboardMainAlpha, err := s.store.GetMatchInitialConfig(matchID)
+	initMapType,
+		initLeaderboardVisible,
+		initPanels,
+		initCountdownEndTS,
+		initCountdownBroadcastMsg,
+		initCountdownTogglePanelID,
+		initCountdownToggleVisible,
+		initCountdownTriggered,
+		screenTitle,
+		initOrganizer,
+		initSupporter,
+		initLeaderboardBG,
+		initBGMURL,
+		initBGMEnabled,
+		initSuccessSFXURL,
+		initSuccessSFXEnabled,
+		initLeaderboardMainAlpha,
+		err := s.store.GetMatchInitialConfig(matchID)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +335,11 @@ func (s *Service) GetInitialStateDTO(matchID string) (*protocol.MatchStateDTO, e
 		Teams:              teams,
 		AttackStats:        []protocol.AttackStatDTO{},
 		Panels:             initPanels,
+		CountdownEndTS:     initCountdownEndTS,
+		CountdownBroadcastMsg:  initCountdownBroadcastMsg,
+		CountdownTogglePanelID: initCountdownTogglePanelID,
+		CountdownToggleVisible: initCountdownToggleVisible,
+		CountdownTriggered:     initCountdownTriggered,
 		ScreenTitle:        screenTitle,
 		ScreenOrganizer:    initOrganizer,
 		ScreenSupporter:    initSupporter,
@@ -203,6 +378,11 @@ func runtimeToStateDTO(rt *MatchRuntime) *protocol.MatchStateDTO {
 		Teams:              rt.Teams,
 		AttackStats:        attackStats,
 		Panels:             panels,
+		CountdownEndTS:     rt.CountdownEndTS,
+		CountdownBroadcastMsg:  rt.CountdownBroadcastMsg,
+		CountdownTogglePanelID: rt.CountdownTogglePanelID,
+		CountdownToggleVisible: rt.CountdownToggleVisible,
+		CountdownTriggered:     rt.CountdownTriggered,
 		ScreenTitle:        rt.ScreenTitle,
 		ScreenOrganizer:    rt.ScreenOrganizer,
 		ScreenSupporter:    rt.ScreenSupporter,
@@ -412,6 +592,44 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 			rt.NextSeq--
 			return nil, err
 		}
+
+	case "set_countdown":
+		var payload struct {
+			EndTS              int64  `json:"end_ts"`
+			BroadcastMsg       string `json:"broadcast_msg"`
+			TogglePanelID      string `json:"toggle_panel_id"`
+			TogglePanelVisible bool   `json:"toggle_panel_visible"`
+		}
+		if err := json.Unmarshal(cmd.Data, &payload); err != nil {
+			rt.NextSeq--
+			return nil, err
+		}
+		if payload.EndTS < 0 {
+			payload.EndTS = 0
+		}
+		rt.CountdownEndTS = payload.EndTS
+		rt.CountdownBroadcastMsg = payload.BroadcastMsg
+		rt.CountdownTogglePanelID = payload.TogglePanelID
+		rt.CountdownToggleVisible = payload.TogglePanelVisible
+		rt.CountdownTriggered = false
+		if err := s.store.UpdateMatchCountdownConfig(
+			rt.ID,
+			payload.EndTS,
+			payload.BroadcastMsg,
+			payload.TogglePanelID,
+			payload.TogglePanelVisible,
+		); err != nil {
+			rt.NextSeq--
+			return nil, err
+		}
+		s.ensureCountdownTimer(
+			rt.ID,
+			rt.CountdownEndTS,
+			rt.CountdownBroadcastMsg,
+			rt.CountdownTogglePanelID,
+			rt.CountdownToggleVisible,
+			rt.CountdownTriggered,
+		)
 
 	case "toggle_panel":
 		var payload struct {
