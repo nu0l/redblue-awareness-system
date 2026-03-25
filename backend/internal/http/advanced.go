@@ -36,7 +36,7 @@ func (s *Server) handleMatchTemplatesSub(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleMatchTemplates(w http.ResponseWriter, r *http.Request, claims *JWTClaims, pathParts []string) {
-	if claims.Role != "admin" {
+	if !isAdminRole(claims.Role) {
 		respondForbidden(w, r)
 		return
 	}
@@ -271,12 +271,19 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 		} else {
 			report.WriteString("## 摘要\n- 本报告为领导简版，建议结合技术详版查看战术细节。\n")
 		}
+		if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("format")), "pdf") {
+			out := buildSimplePDF(report.String())
+			w.Header().Set("Content-Type", "application/pdf")
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s-%s-report.pdf\"", matchID, mode))
+			_, _ = w.Write(out)
+			return true
+		}
 		writeJSON(w, map[string]any{"match_id": matchID, "mode": mode, "markdown": report.String()})
 		return true
 	}
 
 	if len(parts) == 2 && parts[1] == "audit_logs" && r.Method == http.MethodGet {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return true
 		}
@@ -292,4 +299,42 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 	}
 
 	return false
+}
+
+func buildSimplePDF(text string) []byte {
+	escaped := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(text, "\\", "\\\\"), "(", "\\("), ")", "\\)")
+	lines := strings.Split(escaped, "\n")
+	var content strings.Builder
+	content.WriteString("BT /F1 10 Tf 50 790 Td 12 TL ")
+	for i, line := range lines {
+		if i > 0 {
+			content.WriteString("T* ")
+		}
+		content.WriteString("(" + line + ") Tj ")
+	}
+	content.WriteString("ET")
+	stream := content.String()
+	objects := []string{
+		"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+		"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+		"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
+		fmt.Sprintf("4 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n", len(stream), stream),
+		"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+	}
+	var b strings.Builder
+	b.WriteString("%PDF-1.4\n")
+	offsets := []int{0}
+	for _, obj := range objects {
+		offsets = append(offsets, b.Len())
+		b.WriteString(obj)
+	}
+	xrefStart := b.Len()
+	b.WriteString("xref\n0 6\n")
+	b.WriteString("0000000000 65535 f \n")
+	for i := 1; i <= 5; i++ {
+		b.WriteString(fmt.Sprintf("%010d 00000 n \n", offsets[i]))
+	}
+	b.WriteString("trailer\n<< /Size 6 /Root 1 0 R >>\n")
+	b.WriteString(fmt.Sprintf("startxref\n%d\n%%%%EOF", xrefStart))
+	return []byte(b.String())
 }

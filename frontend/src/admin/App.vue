@@ -348,6 +348,11 @@
               <div style="height: 12px"></div>
               <div class="label">原因说明</div>
               <el-input v-model="manualScore.reason" placeholder="例如：提交 Flag 01 / 违规扣分" />
+              <div class="attack-custom-tags" style="margin-top: 8px">
+                <el-tag class="tag" @click="manualScore.reason = '提交有效攻击证据'" style="cursor: pointer">提交有效攻击证据</el-tag>
+                <el-tag class="tag" @click="manualScore.reason = '违规操作扣分'" style="cursor: pointer">违规操作扣分</el-tag>
+                <el-tag class="tag" @click="manualScore.reason = '溯源命中加分'" style="cursor: pointer">溯源命中加分</el-tag>
+              </div>
               <div style="height: 12px"></div>
               <el-button
                 type="primary"
@@ -748,6 +753,121 @@
               </el-table>
             </div>
           </el-card>
+          </div>
+
+          <div v-show="activeSection === 'ops'" class="admin-section">
+            <div class="section-header">
+              <h2 class="section-title">运营与分析</h2>
+              <p class="section-sub">场次模板、任务工单、回放书签、KPI 指标与审计日志。</p>
+            </div>
+            <div class="grid">
+              <el-card shadow="hover" class="card">
+                <template #header>
+                  <div class="row-between">
+                    <div class="card-title">场次模板系统</div>
+                    <el-button size="small" @click="loadTemplates">刷新</el-button>
+                  </div>
+                </template>
+                <div class="row mb12">
+                  <div class="col"><el-input v-model="templateForm.name" placeholder="模板名称" /></div>
+                  <div class="col"><el-input v-model="templateForm.id" placeholder="模板ID(可选)" /></div>
+                </div>
+                <div class="row mb12">
+                  <div class="col"><el-input v-model="templateForm.map_type" placeholder="地图模式" /></div>
+                  <div class="col"><el-input v-model="templateForm.attack_types_csv" placeholder="战术类型(逗号分隔)" /></div>
+                </div>
+                <el-button type="primary" @click="saveTemplate" :loading="isSubmitting">保存模板</el-button>
+                <div style="height: 12px" />
+                <el-table :data="templates" height="220">
+                  <el-table-column prop="id" label="模板ID" min-width="120" />
+                  <el-table-column prop="name" label="名称" min-width="120" />
+                  <el-table-column prop="version" label="版本" width="80" />
+                  <el-table-column prop="map_type" label="地图" width="100" />
+                </el-table>
+              </el-card>
+              <el-card shadow="hover" class="card">
+                <template #header>
+                  <div class="row-between">
+                    <div class="card-title">任务工单与回放书签</div>
+                    <el-button size="small" :disabled="!matchId" @click="loadTasks">刷新</el-button>
+                  </div>
+                </template>
+                <div class="row mb12">
+                  <div class="col"><el-input v-model="taskForm.title" placeholder="任务标题" /></div>
+                  <div class="col"><el-input v-model="taskForm.assignee" placeholder="负责人" /></div>
+                </div>
+                <div class="row mb12">
+                  <div class="col"><el-input v-model="taskForm.category" placeholder="分类" /></div>
+                  <div class="col">
+                    <el-select v-model="taskForm.status" style="width: 100%">
+                      <el-option label="待处理" value="todo" />
+                      <el-option label="处理中" value="doing" />
+                      <el-option label="已完成" value="done" />
+                    </el-select>
+                  </div>
+                </div>
+                <el-button type="primary" :disabled="!matchId" @click="createTask">创建工单</el-button>
+                <div style="height: 12px" />
+                <el-table :data="tasks" height="150">
+                  <el-table-column prop="title" label="任务" min-width="140" />
+                  <el-table-column prop="status" label="状态" width="100" />
+                  <el-table-column prop="assignee" label="负责人" width="120" />
+                </el-table>
+                <el-divider />
+                <div class="row mb12">
+                  <div class="col"><el-input-number v-model="bookmarkForm.seq" :min="1" style="width: 100%" /></div>
+                  <div class="col"><el-input v-model="bookmarkForm.title" placeholder="书签标题" /></div>
+                </div>
+                <el-button :disabled="!matchId" @click="createBookmark">保存书签</el-button>
+              </el-card>
+            </div>
+            <div class="grid">
+              <el-card shadow="hover" class="card">
+                <template #header>
+                  <div class="row-between">
+                    <div class="card-title">KPI 与趋势</div>
+                    <el-button size="small" :disabled="!matchId" @click="loadKpi">刷新</el-button>
+                  </div>
+                </template>
+                <div class="row">
+                  <div class="col"><div class="label">总事件数</div><div class="score">{{ kpi.total_events ?? 0 }}</div></div>
+                  <div class="col"><div class="label">有效攻击率</div><div class="score">{{ formatRate(kpi.effective_attack_rate) }}</div></div>
+                  <div class="col"><div class="label">溯源成功率</div><div class="score">{{ formatRate(kpi.trace_success_rate) }}</div></div>
+                  <div class="col"><div class="label">净分差</div><div class="score">{{ kpi.net_score_diff ?? 0 }}</div></div>
+                </div>
+                <div style="height: 12px" />
+                <el-table :data="trendRows" height="180">
+                  <el-table-column prop="dimension" label="维度" min-width="100" />
+                  <el-table-column prop="key" label="项" min-width="120" />
+                  <el-table-column prop="value" label="数值" min-width="120" />
+                </el-table>
+              </el-card>
+              <el-card shadow="hover" class="card">
+                <template #header>
+                  <div class="row-between">
+                    <div class="card-title">复盘报告与审计日志</div>
+                    <el-button size="small" :disabled="!matchId" @click="loadAuditLogs">刷新</el-button>
+                  </div>
+                </template>
+                <div class="row mb12">
+                  <el-select v-model="reportMode" style="width: 180px">
+                    <el-option label="领导简版" value="leader" />
+                    <el-option label="技术详版" value="tech" />
+                  </el-select>
+                  <el-button type="primary" :disabled="!matchId" @click="generateReport">生成 Markdown 报告</el-button>
+                  <el-button :disabled="!matchId" @click="downloadReportPDF">导出 PDF</el-button>
+                </div>
+                <div class="mono" style="margin-top: 10px; max-height: 160px; overflow: auto; white-space: pre-wrap;">{{ reportMarkdown }}</div>
+                <el-divider />
+                <el-table :data="auditLogs" height="180">
+                  <el-table-column prop="actor" label="操作人" width="110" />
+                  <el-table-column prop="module" label="模块" width="110" />
+                  <el-table-column prop="action" label="动作" min-width="120" />
+                  <el-table-column prop="created_at" label="时间" min-width="120" />
+                </el-table>
+              </el-card>
+            </div>
+          </div>
 
           <div v-show="activeSection === 'ops'" class="admin-section">
             <div class="section-header">
@@ -897,7 +1017,6 @@
               <el-button type="primary" @click="saveTeam">确定并同步</el-button>
             </template>
           </el-dialog>
-          </div>
         </main>
       </div>
     </div>
@@ -1932,6 +2051,25 @@ async function generateReport() {
     reportMarkdown.value = String(res.data.markdown ?? "");
   } catch {
     ElMessage.error("报告生成失败");
+  }
+}
+
+async function downloadReportPDF() {
+  if (!matchId.value) return;
+  try {
+    const res = await axiosClient.get(`/api/matches/${matchId.value}/report`, {
+      params: { mode: reportMode.value, format: "pdf" },
+      responseType: "blob",
+    });
+    const blob = new Blob([res.data], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${matchId.value}-${reportMode.value}-report.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    ElMessage.error("PDF导出失败");
   }
 }
 

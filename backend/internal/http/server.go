@@ -32,6 +32,10 @@ type Server struct {
 	upgrader   websocket.Upgrader
 }
 
+func isAdminRole(role string) bool {
+	return role == "admin" || role == "super_admin"
+}
+
 func NewServer(store *db.Store, matcher *match.Service, hub *ws.Hub, uploadsDir string) *Server {
 	return &Server{
 		store:      store,
@@ -242,6 +246,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		pass string
 		role string
 	}{
+		{strings.TrimSpace(os.Getenv("SUPER_ADMIN_USERNAME")), strings.TrimSpace(os.Getenv("SUPER_ADMIN_PASSWORD")), "super_admin"},
 		{strings.TrimSpace(os.Getenv("ADMIN_USERNAME")), strings.TrimSpace(os.Getenv("ADMIN_PASSWORD")), "admin"},
 		{strings.TrimSpace(os.Getenv("JUDGE_USERNAME")), strings.TrimSpace(os.Getenv("JUDGE_PASSWORD")), "judge"},
 		{strings.TrimSpace(os.Getenv("OBSERVER_USERNAME")), strings.TrimSpace(os.Getenv("OBSERVER_PASSWORD")), "observer"},
@@ -447,7 +452,7 @@ func (s *Server) handleMatchesRoot(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"matches": list})
 	case http.MethodPost:
 		// 创建新场次只允许 admin
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -524,7 +529,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/leaderboard_background  （得分总榜背景图上传/清除）
 	if len(parts) == 2 && parts[1] == "leaderboard_background" {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -541,7 +546,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/audio_upload/{kind} （kind: bgm | success_sfx）
 	if len(parts) == 3 && parts[1] == "audio_upload" && r.Method == http.MethodPost {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -587,7 +592,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, map[string]any{"teams": teams})
 		case http.MethodPost:
-			if claims.Role != "admin" {
+			if !isAdminRole(claims.Role) {
 				respondForbidden(w, r)
 				return
 			}
@@ -630,7 +635,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/teams/import
 	if len(parts) == 3 && parts[1] == "teams" && parts[2] == "import" && r.Method == http.MethodPost {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -684,7 +689,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/teams/batch_update
 	if len(parts) == 3 && parts[1] == "teams" && parts[2] == "batch_update" && r.Method == http.MethodPut {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -712,7 +717,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/teams/{team_id}
 	if len(parts) == 3 && parts[1] == "teams" && r.Method == http.MethodPut {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -755,7 +760,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 3 && parts[1] == "teams" && r.Method == http.MethodDelete {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
