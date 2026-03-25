@@ -94,6 +94,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/api/matches", s.handleMatchesRoot)
 	mux.HandleFunc("/api/matches/", s.handleMatchesSub)
+	mux.HandleFunc("/api/match_templates", s.handleMatchTemplatesRoot)
+	mux.HandleFunc("/api/match_templates/", s.handleMatchTemplatesSub)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -233,27 +235,39 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wantUser := strings.TrimSpace(os.Getenv("ADMIN_USERNAME"))
-	wantPass := strings.TrimSpace(os.Getenv("ADMIN_PASSWORD"))
-	if wantUser == "" || wantPass == "" {
+	accounts := []struct {
+		user string
+		pass string
+		role string
+	}{
+		{strings.TrimSpace(os.Getenv("ADMIN_USERNAME")), strings.TrimSpace(os.Getenv("ADMIN_PASSWORD")), "admin"},
+		{strings.TrimSpace(os.Getenv("JUDGE_USERNAME")), strings.TrimSpace(os.Getenv("JUDGE_PASSWORD")), "judge"},
+		{strings.TrimSpace(os.Getenv("OBSERVER_USERNAME")), strings.TrimSpace(os.Getenv("OBSERVER_PASSWORD")), "observer"},
+	}
+	found := false
+	role := ""
+	for _, a := range accounts {
+		if a.user == "" || a.pass == "" {
+			continue
+		}
+		if req.Username == a.user && subtleTimeEqual(req.Password, a.pass) {
+			found = true
+			role = a.role
+			break
+		}
+	}
+	if !found && strings.TrimSpace(os.Getenv("ADMIN_USERNAME")) == "" {
 		auditLoginFailure(r, req.Username, "admin_not_configured")
 		http.Error(w, "admin credentials are not configured", http.StatusInternalServerError)
 		return
 	}
-
-	// constant-time compare on password
-	if req.Username != wantUser {
-		auditLoginFailure(r, req.Username, "invalid_username_or_password")
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	if subtleTimeEqual(req.Password, wantPass) == false {
+	if !found {
 		auditLoginFailure(r, req.Username, "invalid_username_or_password")
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
-	token, err := signJWT(req.Username, "admin", 7*24*time.Hour)
+	token, err := signJWT(req.Username, role, 7*24*time.Hour)
 	if err != nil {
 		auditLoginFailure(r, req.Username, "token_sign_error")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -263,6 +277,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	auditLoginSuccess(r, req.Username)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
+		"role":  role,
 	})
 }
 
@@ -437,12 +452,18 @@ func (s *Server) handleMatchesRoot(w http.ResponseWriter, r *http.Request) {
 
 		// 创建新场次（match_id 即为一个独立演练，用于多场同时与历史复盘）
 		var req struct {
-			MapType string `json:"map_type"`
+			MapType    string `json:"map_type"`
+			TemplateID string `json:"template_id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		mapType := req.MapType
 		if mapType == "" {
 			mapType = "china"
+		}
+		if strings.TrimSpace(req.TemplateID) != "" {
+			if tpl, err := s.store.GetMatchTemplate(strings.TrimSpace(req.TemplateID)); err == nil && strings.TrimSpace(tpl.MapType) != "" {
+				mapType = tpl.MapType
+			}
 		}
 
 		if mapType != "china" && mapType != "taizhou" {
@@ -492,6 +513,10 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 	matchID := parts[0]
 	if matchID == "" {
 		http.Error(w, "match_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if s.handleMatchAdvancedEndpoints(w, r, claims, matchID, parts) {
 		return
 	}
 
@@ -634,13 +659,13 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to update team", http.StatusInternalServerError)
 			return
 		}
-			// 推送状态刷新到大屏
-			if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{
-				EventType: "teams_updated",
-				Data:      json.RawMessage(`{}`),
-			}); err == nil {
-				s.hub.Broadcast(matchID, *wsMsg)
-			}
+		// 推送状态刷新到大屏
+		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{
+			EventType: "teams_updated",
+			Data:      json.RawMessage(`{}`),
+		}); err == nil {
+			s.hub.Broadcast(matchID, *wsMsg)
+		}
 		auditTeamMutation(r, claims, matchID, "update", teamID)
 		writeJSON(w, map[string]any{"ok": true})
 		return
@@ -660,12 +685,12 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to delete team", http.StatusInternalServerError)
 			return
 		}
-			if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{
-				EventType: "teams_updated",
-				Data:      json.RawMessage(`{}`),
-			}); err == nil {
-				s.hub.Broadcast(matchID, *wsMsg)
-			}
+		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{
+			EventType: "teams_updated",
+			Data:      json.RawMessage(`{}`),
+		}); err == nil {
+			s.hub.Broadcast(matchID, *wsMsg)
+		}
 		auditTeamMutation(r, claims, matchID, "delete", teamID)
 		writeJSON(w, map[string]any{"ok": true})
 		return
@@ -1001,4 +1026,3 @@ func withCORS(h http.Handler) http.Handler {
 		h.ServeHTTP(w, r)
 	})
 }
-
