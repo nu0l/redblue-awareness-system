@@ -1,0 +1,14 @@
+# 排除前端 node_modules 依赖包
+frontend/node_modules/
+
+# 可选：通用 Git 忽略规则（推荐一起加上）
+node_modules/
+.DS_Store
+.env
+.env.local
+.env.development.local
+.idea/
+.vscode/
+*.log
+dist/
+build/
