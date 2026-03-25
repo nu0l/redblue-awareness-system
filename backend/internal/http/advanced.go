@@ -229,7 +229,7 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 	}
 
 	if len(parts) == 3 && parts[1] == "analytics" && parts[2] == "trends" && r.Method == http.MethodGet {
-		trend, err := s.store.ListScoreTrend(matchID)
+		trend, err := s.store.ListTrendsByDimension(matchID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return true
@@ -244,12 +244,34 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return true
 		}
-		trend, _ := s.store.ListScoreTrend(matchID)
-		report := fmt.Sprintf("# %s 赛后复盘报告\n\n- 总事件数: %d\n- 有效攻击率: %.2f\n- 溯源成功率: %.2f\n- 平均响应时延(秒): %.2f\n- 红蓝净分差: %d\n\n## 维度趋势\n", matchID, kpi.TotalEvents, kpi.EffectiveAttackRate, kpi.TraceSuccessRate, kpi.AvgResponseSeconds, kpi.NetScoreDiff)
-		for _, p := range trend {
-			report += fmt.Sprintf("- %s: %.0f\n", p.Key, p.Value)
+		mode := strings.TrimSpace(r.URL.Query().Get("mode"))
+		if mode == "" {
+			mode = "leader"
 		}
-		writeJSON(w, map[string]any{"match_id": matchID, "markdown": report})
+		trends, _ := s.store.ListTrendsByDimension(matchID)
+		topTactics := trends["tactic"]
+		if len(topTactics) > 5 {
+			topTactics = topTactics[:5]
+		}
+		var report strings.Builder
+		report.WriteString(fmt.Sprintf("# %s 赛后复盘报告（%s）\n\n", matchID, mode))
+		report.WriteString(fmt.Sprintf("- 总事件数: %d\n- 有效攻击率: %.2f\n- 溯源成功率: %.2f\n- 平均响应时延(秒): %.2f\n- 红蓝净分差: %d\n\n", kpi.TotalEvents, kpi.EffectiveAttackRate, kpi.TraceSuccessRate, kpi.AvgResponseSeconds, kpi.NetScoreDiff))
+		if mode == "tech" {
+			report.WriteString("## TOP 战术\n")
+			for _, p := range topTactics {
+				report.WriteString(fmt.Sprintf("- %s: %.0f 次\n", p.Key, p.Value))
+			}
+			report.WriteString("\n## 趋势明细\n")
+			for key, list := range trends {
+				report.WriteString(fmt.Sprintf("### %s\n", key))
+				for _, p := range list {
+					report.WriteString(fmt.Sprintf("- %s: %.0f\n", p.Key, p.Value))
+				}
+			}
+		} else {
+			report.WriteString("## 摘要\n- 本报告为领导简版，建议结合技术详版查看战术细节。\n")
+		}
+		writeJSON(w, map[string]any{"match_id": matchID, "mode": mode, "markdown": report.String()})
 		return true
 	}
 
@@ -258,7 +280,9 @@ func (s *Server) handleMatchAdvancedEndpoints(w http.ResponseWriter, r *http.Req
 			respondForbidden(w, r)
 			return true
 		}
-		items, err := s.store.ListAuditLogs(matchID, r.URL.Query().Get("actor"), r.URL.Query().Get("module"))
+		fromTS, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("from_ts")), 10, 64)
+		toTS, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("to_ts")), 10, 64)
+		items, err := s.store.ListAuditLogs(matchID, r.URL.Query().Get("actor"), r.URL.Query().Get("module"), fromTS, toTS)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return true

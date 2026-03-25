@@ -251,12 +251,59 @@ func (s *Store) ListScoreTrend(matchID string) ([]TrendPoint, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) ListTrendsByDimension(matchID string) (map[string][]TrendPoint, error) {
+	out := map[string][]TrendPoint{
+		"team":   {},
+		"tactic": {},
+		"round":  {},
+	}
+	teamRows, err := s.db.Query(`SELECT type, COALESCE(SUM(score),0) FROM teams WHERE match_id=? GROUP BY type`, matchID)
+	if err != nil {
+		return out, err
+	}
+	for teamRows.Next() {
+		var k string
+		var v float64
+		if err := teamRows.Scan(&k, &v); err == nil {
+			out["team"] = append(out["team"], TrendPoint{Key: k, Value: v})
+		}
+	}
+	_ = teamRows.Close()
+
+	tacticRows, err := s.db.Query(`SELECT COALESCE(json_extract(payload_json, '$.attack_type'), ''), COUNT(1) FROM events WHERE match_id=? GROUP BY 1 ORDER BY COUNT(1) DESC LIMIT 20`, matchID)
+	if err != nil {
+		return out, err
+	}
+	for tacticRows.Next() {
+		var k string
+		var v float64
+		if err := tacticRows.Scan(&k, &v); err == nil && strings.TrimSpace(k) != "" {
+			out["tactic"] = append(out["tactic"], TrendPoint{Key: k, Value: v})
+		}
+	}
+	_ = tacticRows.Close()
+
+	roundRows, err := s.db.Query(`SELECT ((seq-1)/20)+1 AS round_bucket, COUNT(1) FROM events WHERE match_id=? GROUP BY round_bucket ORDER BY round_bucket ASC`, matchID)
+	if err != nil {
+		return out, err
+	}
+	for roundRows.Next() {
+		var roundBucket int
+		var cnt float64
+		if err := roundRows.Scan(&roundBucket, &cnt); err == nil {
+			out["round"] = append(out["round"], TrendPoint{Key: fmt.Sprintf("R%d", roundBucket), Value: cnt})
+		}
+	}
+	_ = roundRows.Close()
+	return out, nil
+}
+
 func (s *Store) CreateAuditLog(item AuditLog) error {
 	_, err := s.db.Exec(`INSERT INTO audit_logs(match_id,actor,role,module,action,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?,?)`, item.MatchID, item.Actor, item.Role, item.Module, item.Action, item.Before, item.After, time.Now().Unix())
 	return err
 }
 
-func (s *Store) ListAuditLogs(matchID, actor, module string) ([]AuditLog, error) {
+func (s *Store) ListAuditLogs(matchID, actor, module string, fromTS, toTS int64) ([]AuditLog, error) {
 	query := `SELECT id, match_id, actor, role, module, action, before_json, after_json, created_at FROM audit_logs WHERE match_id=?`
 	args := []any{matchID}
 	if strings.TrimSpace(actor) != "" {
@@ -266,6 +313,14 @@ func (s *Store) ListAuditLogs(matchID, actor, module string) ([]AuditLog, error)
 	if strings.TrimSpace(module) != "" {
 		query += ` AND module=?`
 		args = append(args, module)
+	}
+	if fromTS > 0 {
+		query += ` AND created_at>=?`
+		args = append(args, fromTS)
+	}
+	if toTS > 0 {
+		query += ` AND created_at<=?`
+		args = append(args, toTS)
 	}
 	query += ` ORDER BY created_at DESC, id DESC LIMIT 500`
 	rows, err := s.db.Query(query, args...)

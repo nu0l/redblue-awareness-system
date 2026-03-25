@@ -86,6 +86,9 @@
           <el-option v-for="m in matches" :key="m.id" :label="m.id" :value="m.id" />
         </el-select>
         <el-button type="primary" @click="createMatch">创建新场次</el-button>
+        <el-select v-model="selectedTemplateId" clearable placeholder="套用模板创建" style="width: 180px">
+          <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
+        </el-select>
 
         <el-button
           :disabled="!matchId"
@@ -562,6 +565,17 @@
                 <div class="card-title">全局系统广播推送</div>
               </template>
               <el-input v-model="broadcastMsg" type="textarea" :rows="3" placeholder="演练进入最后1小时冲刺..." />
+              <div class="attack-custom-tags" style="margin-top: 8px">
+                <el-tag
+                  v-for="tpl in broadcastTemplates"
+                  :key="tpl"
+                  class="tag"
+                  @click="broadcastMsg = tpl"
+                  style="cursor: pointer"
+                >
+                  {{ tpl }}
+                </el-tag>
+              </div>
               <div style="height: 12px"></div>
               <el-button type="warning" class="w-full" :loading="isSubmitting" @click="submitBroadcast">
                 发送全局通知
@@ -645,6 +659,15 @@
                 <el-button type="primary" @click="openAddTeamDialog">新增队伍</el-button>
               </div>
             </template>
+            <div class="row mb12">
+              <div class="col">
+                <el-input v-model="teamImportCSV" type="textarea" :rows="3" placeholder="CSV: name,type,members(成员用|分隔)" />
+              </div>
+            </div>
+            <div class="row mb12">
+              <el-button :disabled="!matchId" @click="importTeamsByCSV">CSV批量导入队伍</el-button>
+              <el-button :disabled="!matchId" @click="bulkSyncTeams">批量同步当前表格</el-button>
+            </div>
 
             <el-table :data="teams" style="width: 100%">
               <el-table-column prop="id" label="ID" width="70" />
@@ -807,8 +830,9 @@
                   <div class="col"><div class="label">净分差</div><div class="score">{{ kpi.net_score_diff ?? 0 }}</div></div>
                 </div>
                 <div style="height: 12px" />
-                <el-table :data="trends" height="180">
-                  <el-table-column prop="key" label="维度" min-width="120" />
+                <el-table :data="trendRows" height="180">
+                  <el-table-column prop="dimension" label="维度" min-width="100" />
+                  <el-table-column prop="key" label="项" min-width="120" />
                   <el-table-column prop="value" label="数值" min-width="120" />
                 </el-table>
               </el-card>
@@ -819,7 +843,13 @@
                     <el-button size="small" :disabled="!matchId" @click="loadAuditLogs">刷新</el-button>
                   </div>
                 </template>
-                <el-button type="primary" :disabled="!matchId" @click="generateReport">生成 Markdown 报告</el-button>
+                <div class="row mb12">
+                  <el-select v-model="reportMode" style="width: 180px">
+                    <el-option label="领导简版" value="leader" />
+                    <el-option label="技术详版" value="tech" />
+                  </el-select>
+                  <el-button type="primary" :disabled="!matchId" @click="generateReport">生成 Markdown 报告</el-button>
+                </div>
                 <div class="mono" style="margin-top: 10px; max-height: 160px; overflow: auto; white-space: pre-wrap;">{{ reportMarkdown }}</div>
                 <el-divider />
                 <el-table :data="auditLogs" height="180">
@@ -1005,6 +1035,22 @@ axiosClient.interceptors.response.use(
   }
 );
 
+async function requestWithRetry<T>(runner: () => Promise<T>, retries = 2, delayMs = 350): Promise<T> {
+  let lastErr: any;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await runner();
+    } catch (e: any) {
+      lastErr = e;
+      const status = e?.response?.status;
+      const retryable = !status || status >= 500;
+      if (!retryable || i === retries) break;
+      await new Promise((resolve) => setTimeout(resolve, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function doLogin() {
   loginSubmitting.value = true;
   try {
@@ -1070,6 +1116,7 @@ const leaderboardBgPreview = computed(() => {
 });
 const replaySpeedOnScreen = ref(8);
 const templates = ref<any[]>([]);
+const selectedTemplateId = ref("");
 const templateForm = reactive({
   id: "",
   name: "",
@@ -1088,9 +1135,16 @@ const bookmarkForm = reactive({
   title: "",
 });
 const kpi = ref<any>({});
-const trends = ref<any[]>([]);
+const trends = ref<Record<string, any[]>>({});
 const reportMarkdown = ref("");
 const auditLogs = ref<any[]>([]);
+const reportMode = ref<"leader" | "tech">("leader");
+const teamImportCSV = ref("name,type,members\n红队一,red,成员A|成员B\n蓝队一,blue,成员C|成员D");
+const broadcastTemplates = ref([
+  "演练进入最后30分钟，请各队聚焦关键目标。",
+  "裁判提示：请同步提交证据材料。",
+  "请各队确认当前比分与事件序列。",
+]);
 
 const teams = ref<TeamDTO[]>([]);
 const redTeams = computed(() => teams.value.filter((t) => t.type === "red"));
@@ -1449,7 +1503,7 @@ function removeAttackType(type: string) {
 async function createMatch() {
   isSubmitting.value = true;
   try {
-    const res = await axiosClient.post("/api/matches", {});
+    const res = await axiosClient.post("/api/matches", { template_id: selectedTemplateId.value || "" });
     const id = res.data.match_id;
     ElMessage.success("已创建新场次");
     matchId.value = id;
@@ -1753,7 +1807,7 @@ async function loadReplayEvents() {
     if (eventFilter.attack_type.trim()) params.attack_type = eventFilter.attack_type.trim();
     if (eventFilter.status.trim()) params.status = eventFilter.status.trim();
     if (eventFilter.min_score > 0) params.min_score = eventFilter.min_score;
-    const res = await axiosClient.get(`/api/matches/${matchId.value}/events_enhanced`, { params });
+    const res = await requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/events_enhanced`, { params }));
     const evs = res.data.events ?? [];
     replayEvents.value = evs.map((ev: any) => {
       const payloadObj = ev.payload_raw ?? ev.PayloadRaw ?? ev.payloadRaw ?? ev.payload_json ?? ev.payload;
@@ -1776,10 +1830,19 @@ function formatRate(v: number | undefined) {
   const n = Number(v ?? 0);
   return `${(n * 100).toFixed(1)}%`;
 }
+const trendRows = computed(() =>
+  Object.entries(trends.value ?? {}).flatMap(([dimension, list]) =>
+    (list ?? []).map((x: any) => ({
+      dimension,
+      key: x.key,
+      value: x.value,
+    }))
+  )
+);
 
 async function loadTemplates() {
   try {
-    const res = await axiosClient.get("/api/match_templates");
+    const res = await requestWithRetry(() => axiosClient.get("/api/match_templates"));
     templates.value = res.data.templates ?? [];
   } catch {
     ElMessage.error("模板加载失败");
@@ -1809,7 +1872,7 @@ async function saveTemplate() {
 async function loadTasks() {
   if (!matchId.value) return;
   try {
-    const res = await axiosClient.get(`/api/matches/${matchId.value}/tasks`);
+    const res = await requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/tasks`));
     tasks.value = res.data.tasks ?? [];
   } catch {
     ElMessage.error("工单加载失败");
@@ -1852,11 +1915,11 @@ async function loadKpi() {
   if (!matchId.value) return;
   try {
     const [kpiRes, trendRes] = await Promise.all([
-      axiosClient.get(`/api/matches/${matchId.value}/analytics/kpi`),
-      axiosClient.get(`/api/matches/${matchId.value}/analytics/trends`),
+      requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/analytics/kpi`)),
+      requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/analytics/trends`)),
     ]);
     kpi.value = kpiRes.data.kpi ?? {};
-    trends.value = trendRes.data.trends ?? [];
+    trends.value = trendRes.data.trends ?? {};
   } catch {
     ElMessage.error("KPI 加载失败");
   }
@@ -1865,7 +1928,7 @@ async function loadKpi() {
 async function generateReport() {
   if (!matchId.value) return;
   try {
-    const res = await axiosClient.get(`/api/matches/${matchId.value}/report`);
+    const res = await axiosClient.get(`/api/matches/${matchId.value}/report`, { params: { mode: reportMode.value } });
     reportMarkdown.value = String(res.data.markdown ?? "");
   } catch {
     ElMessage.error("报告生成失败");
@@ -1875,10 +1938,49 @@ async function generateReport() {
 async function loadAuditLogs() {
   if (!matchId.value) return;
   try {
-    const res = await axiosClient.get(`/api/matches/${matchId.value}/audit_logs`);
+    const res = await requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/audit_logs`));
     auditLogs.value = res.data.audit_logs ?? [];
   } catch {
     ElMessage.error("审计日志加载失败");
+  }
+}
+
+function handleAdminHotkeys(e: KeyboardEvent) {
+  if (!isAuthed.value) return;
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const key = e.key.toLowerCase();
+  if (key === "b") {
+    e.preventDefault();
+    if (broadcastMsg.value.trim()) void submitBroadcast();
+  } else if (key === "r") {
+    e.preventDefault();
+    void startReplayOnScreen();
+  } else if (key === "m") {
+    e.preventDefault();
+    if (audioPlaying.bgm) stopBgm();
+    else void testBgm();
+  }
+}
+
+async function importTeamsByCSV() {
+  if (!matchId.value) return;
+  try {
+    await axiosClient.post(`/api/matches/${matchId.value}/teams/import`, { csv_text: teamImportCSV.value });
+    ElMessage.success("CSV导入完成");
+    await fetchTeams();
+  } catch {
+    ElMessage.error("CSV导入失败");
+  }
+}
+
+async function bulkSyncTeams() {
+  if (!matchId.value) return;
+  try {
+    await axiosClient.put(`/api/matches/${matchId.value}/teams/batch_update`, { teams: teams.value });
+    ElMessage.success("批量同步完成");
+    await fetchTeams();
+  } catch {
+    ElMessage.error("批量同步失败");
   }
 }
 
@@ -1891,6 +1993,7 @@ onMounted(async () => {
   await fetchState();
   await fetchTeams();
   await loadTemplates();
+  window.addEventListener("keydown", handleAdminHotkeys);
 });
 
 onBeforeUnmount(() => {
@@ -1898,6 +2001,7 @@ onBeforeUnmount(() => {
     window.clearInterval(sloganTimer.value);
     sloganTimer.value = null;
   }
+  window.removeEventListener("keydown", handleAdminHotkeys);
 });
 </script>
 

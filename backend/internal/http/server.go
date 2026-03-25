@@ -1,6 +1,8 @@
 package httpserver
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -626,6 +628,88 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/matches/{match_id}/teams/import
+	if len(parts) == 3 && parts[1] == "teams" && parts[2] == "import" && r.Method == http.MethodPost {
+		if claims.Role != "admin" {
+			respondForbidden(w, r)
+			return
+		}
+		var req struct {
+			CSVText string `json:"csv_text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		reader := csv.NewReader(bytes.NewBufferString(req.CSVText))
+		rows, err := reader.ReadAll()
+		if err != nil {
+			http.Error(w, "invalid csv", http.StatusBadRequest)
+			return
+		}
+		created := 0
+		for i, row := range rows {
+			if i == 0 && len(row) >= 2 && strings.Contains(strings.ToLower(row[0]), "name") {
+				continue
+			}
+			if len(row) < 2 {
+				continue
+			}
+			name := strings.TrimSpace(row[0])
+			typ := strings.TrimSpace(row[1])
+			if name == "" || (typ != "red" && typ != "blue") {
+				continue
+			}
+			dto := protocol.TeamDTO{
+				Name:    name,
+				Type:    typ,
+				Logo:    "?",
+				Score:   0,
+				Members: []string{},
+			}
+			if len(row) >= 3 && strings.TrimSpace(row[2]) != "" {
+				dto.Members = strings.Split(strings.TrimSpace(row[2]), "|")
+			}
+			if _, err := s.store.CreateTeam(matchID, dto); err == nil {
+				created++
+			}
+		}
+		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{EventType: "teams_updated", Data: json.RawMessage(`{}`)}); err == nil {
+			s.hub.Broadcast(matchID, *wsMsg)
+		}
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "import_csv", After: req.CSVText})
+		writeJSON(w, map[string]any{"ok": true, "created": created})
+		return
+	}
+
+	// /api/matches/{match_id}/teams/batch_update
+	if len(parts) == 3 && parts[1] == "teams" && parts[2] == "batch_update" && r.Method == http.MethodPut {
+		if claims.Role != "admin" {
+			respondForbidden(w, r)
+			return
+		}
+		var req struct {
+			Teams []protocol.TeamDTO `json:"teams"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		for _, t := range req.Teams {
+			if t.ID > 0 {
+				_ = s.store.UpdateTeam(matchID, t.ID, t)
+				continue
+			}
+			_, _ = s.store.CreateTeam(matchID, t)
+		}
+		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{EventType: "teams_updated", Data: json.RawMessage(`{}`)}); err == nil {
+			s.hub.Broadcast(matchID, *wsMsg)
+		}
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "batch_update", After: "bulk"})
+		writeJSON(w, map[string]any{"ok": true, "updated": len(req.Teams)})
+		return
+	}
+
 	// /api/matches/{match_id}/teams/{team_id}
 	if len(parts) == 3 && parts[1] == "teams" && r.Method == http.MethodPut {
 		if claims.Role != "admin" {
@@ -723,7 +807,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/command
 	if len(parts) == 2 && parts[1] == "command" && r.Method == http.MethodPost {
-		if claims.Role != "admin" {
+		if claims.Role == "observer" {
 			respondForbidden(w, r)
 			return
 		}
@@ -742,6 +826,26 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 		// 广播事件与同步态
 		s.hub.Broadcast(matchID, *wsMsg)
 		auditAdminCommand(r, claims, matchID, req.EventType, wsMsg.Seq)
+		_ = s.store.CreateAuditLog(db.AuditLog{
+			MatchID: matchID,
+			Actor:   claims.Sub,
+			Role:    claims.Role,
+			Module:  "command",
+			Action:  req.EventType,
+			After:   string(req.Data),
+		})
+		switch req.EventType {
+		case "attack_success", "manual_score", "system_broadcast":
+			_, _ = s.store.CreateTask(db.TaskItem{
+				MatchID:   matchID,
+				Category:  req.EventType,
+				Title:     "自动任务：" + req.EventType,
+				Status:    "done",
+				Assignee:  claims.Sub,
+				CreatedBy: claims.Sub,
+				Payload:   req.Data,
+			})
+		}
 		writeJSON(w, map[string]any{"ok": true, "seq": wsMsg.Seq})
 		return
 	}

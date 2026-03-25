@@ -7,6 +7,7 @@ type Options = {
   onMessage: (msg: WSMessage) => void;
   onOpen?: () => void;
   onClose?: () => void;
+  onStatus?: (status: "connecting" | "connected" | "reconnecting" | "closed") => void;
 };
 
 function toWsUrl(httpBase: string, matchId: string, token?: string) {
@@ -23,8 +24,10 @@ export function connectMatchWS(opts: Options) {
   let timer: number | undefined;
 
   const connect = () => {
+    opts.onStatus?.("connecting");
     ws = new WebSocket(toWsUrl(opts.apiBaseHttp, opts.matchId, opts.token));
     ws.onopen = () => {
+      opts.onStatus?.("connected");
       opts.onOpen?.();
     };
     ws.onmessage = (ev) => {
@@ -36,8 +39,9 @@ export function connectMatchWS(opts: Options) {
       }
     };
     ws.onclose = () => {
+      opts.onStatus?.("reconnecting");
       opts.onClose?.();
-      timer = window.setTimeout(connect, 5000);
+      timer = window.setTimeout(connect, 3000);
     };
     ws.onerror = () => {
       // let onclose trigger reconnection
@@ -50,7 +54,7 @@ export function connectMatchWS(opts: Options) {
     close: () => {
       if (timer) window.clearTimeout(timer);
       ws?.close();
+      opts.onStatus?.("closed");
     }
   };
 }
-
