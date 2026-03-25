@@ -1,24 +1,36 @@
 <template>
   <div class="admin-root">
     <div v-if="!isAuthed" class="admin-login-overlay">
+      <div class="login-orb orb-a" aria-hidden="true"></div>
+      <div class="login-orb orb-b" aria-hidden="true"></div>
       <div class="admin-login-shell">
         <section class="admin-login-brand">
-          <div class="admin-login-brand-kicker">RedBlue Awareness</div>
-          <h2 class="admin-login-brand-title">红蓝对抗指挥后台</h2>
+          <div class="admin-login-brand-kicker">CareerCompass · Inspired Layout</div>
+          <h2 class="admin-login-brand-title">RedBlue Command Center</h2>
           <p class="admin-login-brand-desc">
-            统一管理场次、战队、回放与可视化联动，登录后进入完整控制台。
+            统一管理场次、战队、回放与可视化联动，让登录页和后台都具备一致的产品化体验。
           </p>
           <div class="admin-login-brand-tags">
             <span class="login-tag">WebSocket 实时联动</span>
             <span class="login-tag">攻防演练指挥</span>
             <span class="login-tag">事件可追溯回放</span>
+            <span class="login-tag">Glassmorphism UI</span>
+          </div>
+          <ul class="login-feature-list">
+            <li>细粒度模块导航：对抗演练 / 大屏视觉 / 广播回放 / 数据维护</li>
+            <li>统一配色与卡片系统：登录、顶部栏、侧边导航视觉一致</li>
+            <li>重点操作突出：创建场次、推送指令、全库重置风险隔离</li>
+          </ul>
+          <div class="login-slogan-rotator">
+            <span class="rotator-label">NOW SHOWING</span>
+            <span class="rotator-text">{{ activeSlogan }}</span>
           </div>
         </section>
 
-        <section class="admin-login-card">
+        <section class="admin-login-card" :class="{ 'login-error': loginErrorPulse }">
           <div class="admin-login-card-head">
             <div class="admin-login-card-title">管理员登录</div>
-            <div class="admin-login-card-sub">请输入后台账号与密码</div>
+            <div class="admin-login-card-sub">请使用后台账号继续访问 Command Center</div>
           </div>
           <div class="admin-login-mascot" :class="{ peeking: loginPeek }" aria-hidden="true">
             <div class="mascot-head">
@@ -30,10 +42,10 @@
             <div class="mascot-hand hand-right"></div>
           </div>
           <el-form :model="loginForm" label-position="top" @submit.prevent>
-            <el-form-item label="用户名">
+            <el-form-item label="用户名" class="neon-input">
               <el-input v-model="loginForm.username" placeholder="ADMIN_USERNAME" @keyup.enter="doLogin" />
             </el-form-item>
-            <el-form-item label="密码">
+            <el-form-item label="密码" class="neon-input">
               <el-input
                 v-model="loginForm.password"
                 type="password"
@@ -46,7 +58,7 @@
             </el-form-item>
           </el-form>
           <div class="admin-login-actions">
-            <el-button type="primary" class="admin-login-submit" :loading="loginSubmitting" @click="doLogin">登录</el-button>
+            <el-button type="primary" class="admin-login-submit" :loading="loginSubmitting" @click="doLogin">Continue</el-button>
           </div>
         </section>
       </div>
@@ -57,7 +69,10 @@
     <header class="admin-header">
       <div class="admin-header-left">
         <div class="admin-logo"></div>
-        <div class="admin-title font-cyber">红蓝对抗大屏指挥中心（Admin）</div>
+        <div>
+          <div class="admin-title font-cyber">红蓝对抗指挥中心 · Admin Workspace</div>
+          <div class="admin-subtitle">Inspired by CareerCompass login/dashboard visual language</div>
+        </div>
       </div>
 
       <div class="admin-header-right">
@@ -71,6 +86,9 @@
           <el-option v-for="m in matches" :key="m.id" :label="m.id" :value="m.id" />
         </el-select>
         <el-button type="primary" @click="createMatch">创建新场次</el-button>
+        <el-select v-model="selectedTemplateId" clearable placeholder="套用模板创建" style="width: 180px">
+          <el-option v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
+        </el-select>
 
         <el-button
           :disabled="!matchId"
@@ -86,6 +104,7 @@
           plain
           @click="openLeaderboard"
         >得分总榜</el-button>
+        <el-button type="danger" plain @click="doLogout">退出登录</el-button>
       </div>
     </header>
 
@@ -103,7 +122,7 @@
             :class="{ active: activeSection === 'combat' }"
             @click="activeSection = 'combat'"
           >
-            <span class="nav-card-ico" aria-hidden="true">🎯</span>
+            <span class="nav-card-ico" aria-hidden="true">CB</span>
             <div class="nav-card-body">
               <div class="nav-card-title">对抗演练</div>
               <div class="nav-card-desc">攻击飞线、裁判加扣分</div>
@@ -116,7 +135,7 @@
             :class="{ active: activeSection === 'screen' }"
             @click="activeSection = 'screen'"
           >
-            <span class="nav-card-ico" aria-hidden="true">👁️</span>
+            <span class="nav-card-ico" aria-hidden="true">VS</span>
             <div class="nav-card-body">
               <div class="nav-card-title">大屏与视觉</div>
               <div class="nav-card-desc">底图、标题、总榜与音频</div>
@@ -129,7 +148,7 @@
             :class="{ active: activeSection === 'broadcast' }"
             @click="activeSection = 'broadcast'"
           >
-            <span class="nav-card-ico" aria-hidden="true">📢</span>
+            <span class="nav-card-ico" aria-hidden="true">BC</span>
             <div class="nav-card-body">
               <div class="nav-card-title">广播与回放</div>
               <div class="nav-card-desc">全局通知、大屏复盘</div>
@@ -142,7 +161,7 @@
             :class="{ active: activeSection === 'maintenance' }"
             @click="activeSection = 'maintenance'"
           >
-            <span class="nav-card-ico" aria-hidden="true">🧽</span>
+            <span class="nav-card-ico" aria-hidden="true">MT</span>
             <div class="nav-card-body">
               <div class="nav-card-title">数据维护</div>
               <div class="nav-card-desc">重置场次或全库</div>
@@ -157,10 +176,23 @@
             :class="{ active: activeSection === 'teams' }"
             @click="activeSection = 'teams'"
           >
-            <span class="nav-card-ico" aria-hidden="true">👥</span>
+            <span class="nav-card-ico" aria-hidden="true">TM</span>
             <div class="nav-card-body">
               <div class="nav-card-title">队伍与复盘</div>
               <div class="nav-card-desc">参演队伍、事件流</div>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            class="nav-card"
+            :class="{ active: activeSection === 'ops' }"
+            @click="activeSection = 'ops'"
+          >
+            <span class="nav-card-ico" aria-hidden="true">OP</span>
+            <div class="nav-card-body">
+              <div class="nav-card-title">运营与分析</div>
+              <div class="nav-card-desc">模板、工单、KPI与审计</div>
             </div>
           </button>
         </aside>
@@ -175,7 +207,7 @@
           <div class="grid">
             <el-card shadow="hover" class="card">
               <template #header>
-                <div class="card-title">🎯 触发攻击飞线与自动计分</div>
+                <div class="card-title">触发攻击飞线与自动计分</div>
               </template>
               <el-form :model="attackForm" label-width="100px">
                 <el-form-item label="攻击战队">
@@ -202,9 +234,9 @@
 
                 <el-form-item label="攻击状态">
                   <el-select v-model="attackForm.status" style="width: 100%">
-                    <el-option label="💥 攻击成功" value="success" />
-                    <el-option v-if="hasBlueTeam" label="🛡️ 防守成功" value="defense_success" />
-                    <el-option v-if="hasBlueTeam" label="🔎 溯源成功" value="trace_success" />
+                    <el-option label="攻击成功" value="success" />
+                    <el-option v-if="hasBlueTeam" label="防守成功" value="defense_success" />
+                    <el-option v-if="hasBlueTeam" label="溯源成功" value="trace_success" />
                   </el-select>
                 </el-form-item>
 
@@ -291,7 +323,7 @@
                     :disabled="!attackReady"
                     @click="submitCommand('attack_success', attackForm)"
                   >
-                    🚀 发射飞线指令
+                    发射飞线指令
                   </el-button>
                 </el-form-item>
               </el-form>
@@ -299,7 +331,7 @@
 
             <el-card shadow="hover" class="card">
               <template #header>
-                <div class="card-title">⚖️ 裁判手动加扣分</div>
+                <div class="card-title">裁判手动加扣分</div>
               </template>
               <div class="row">
                 <div class="col">
@@ -338,7 +370,7 @@
           <div class="grid grid-single">
             <el-card shadow="hover" class="card small">
               <template #header>
-                <div class="card-title">👁️ 视觉与悬念控制台</div>
+                <div class="card-title">视觉与悬念控制台</div>
               </template>
 
               <div class="row-between mb12">
@@ -530,9 +562,20 @@
           <div class="grid">
             <el-card shadow="hover" class="card small">
               <template #header>
-                <div class="card-title">📢 全局系统广播推送</div>
+                <div class="card-title">全局系统广播推送</div>
               </template>
               <el-input v-model="broadcastMsg" type="textarea" :rows="3" placeholder="演练进入最后1小时冲刺..." />
+              <div class="attack-custom-tags" style="margin-top: 8px">
+                <el-tag
+                  v-for="tpl in broadcastTemplates"
+                  :key="tpl"
+                  class="tag"
+                  @click="broadcastMsg = tpl"
+                  style="cursor: pointer"
+                >
+                  {{ tpl }}
+                </el-tag>
+              </div>
               <div style="height: 12px"></div>
               <el-button type="warning" class="w-full" :loading="isSubmitting" @click="submitBroadcast">
                 发送全局通知
@@ -541,7 +584,7 @@
 
             <el-card shadow="hover" class="card small">
               <template #header>
-                <div class="card-title">⏪ 回放控制（从 Seq 开始）</div>
+                <div class="card-title">回放控制（从 Seq 开始）</div>
               </template>
               <div class="row">
                 <div class="col">
@@ -584,7 +627,7 @@
           <div class="grid grid-single">
             <el-card shadow="hover" class="card small">
               <template #header>
-                <div class="card-title">🧽 数据维护（重置）</div>
+                <div class="card-title">数据维护（重置）</div>
               </template>
               <el-button type="danger" class="w-full" :disabled="isSubmitting" :loading="resetSubmitting" @click="resetAllDB">
                 重置全部数据
@@ -612,10 +655,19 @@
           <el-card shadow="hover" class="card">
             <template #header>
               <div class="row-between">
-                <div class="card-title">👥 参演队伍配置管理</div>
-                <el-button type="primary" @click="openAddTeamDialog">➕ 新增队伍</el-button>
+                <div class="card-title">参演队伍配置管理</div>
+                <el-button type="primary" @click="openAddTeamDialog">新增队伍</el-button>
               </div>
             </template>
+            <div class="row mb12">
+              <div class="col">
+                <el-input v-model="teamImportCSV" type="textarea" :rows="3" placeholder="CSV: name,type,members(成员用|分隔)" />
+              </div>
+            </div>
+            <div class="row mb12">
+              <el-button :disabled="!matchId" @click="importTeamsByCSV">CSV批量导入队伍</el-button>
+              <el-button :disabled="!matchId" @click="bulkSyncTeams">批量同步当前表格</el-button>
+            </div>
 
             <el-table :data="teams" style="width: 100%">
               <el-table-column prop="id" label="ID" width="70" />
@@ -628,7 +680,7 @@
               <el-table-column prop="type" label="阵营" width="140">
                 <template #default="{ row }">
                   <el-tag :type="row.type === 'red' ? 'danger' : 'primary'" effect="dark">
-                    {{ row.type === 'red' ? '🔴 红队' : '🔵 蓝队' }}
+                    {{ row.type === 'red' ? '红队' : '蓝队' }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -657,6 +709,21 @@
                   加载事件
                 </el-button>
               </div>
+              <div class="row" style="margin-top: 10px">
+                <div class="col">
+                  <el-input v-model="eventFilter.attack_type" placeholder="按战术类型过滤" clearable />
+                </div>
+                <div class="col">
+                  <el-select v-model="eventFilter.status" placeholder="状态过滤" clearable style="width: 100%">
+                    <el-option label="攻击成功" value="success" />
+                    <el-option label="防守成功" value="defense_success" />
+                    <el-option label="溯源成功" value="trace_success" />
+                  </el-select>
+                </div>
+                <div class="col">
+                  <el-input-number v-model="eventFilter.min_score" :step="50" placeholder="最小分值" style="width: 100%" />
+                </div>
+              </div>
               <el-table :data="replayEvents" style="width: 100%; margin-top: 12px" height="260">
                 <el-table-column prop="seq" label="Seq" width="70" />
                 <el-table-column prop="event_type" label="事件类型" width="180" />
@@ -681,6 +748,119 @@
               </el-table>
             </div>
           </el-card>
+
+          <div v-show="activeSection === 'ops'" class="admin-section">
+            <div class="section-header">
+              <h2 class="section-title">运营与分析</h2>
+              <p class="section-sub">场次模板、任务工单、回放书签、KPI 指标与审计日志。</p>
+            </div>
+            <div class="grid">
+              <el-card shadow="hover" class="card">
+                <template #header>
+                  <div class="row-between">
+                    <div class="card-title">场次模板系统</div>
+                    <el-button size="small" @click="loadTemplates">刷新</el-button>
+                  </div>
+                </template>
+                <div class="row mb12">
+                  <div class="col"><el-input v-model="templateForm.name" placeholder="模板名称" /></div>
+                  <div class="col"><el-input v-model="templateForm.id" placeholder="模板ID(可选)" /></div>
+                </div>
+                <div class="row mb12">
+                  <div class="col"><el-input v-model="templateForm.map_type" placeholder="地图模式" /></div>
+                  <div class="col"><el-input v-model="templateForm.attack_types_csv" placeholder="战术类型(逗号分隔)" /></div>
+                </div>
+                <el-button type="primary" @click="saveTemplate" :loading="isSubmitting">保存模板</el-button>
+                <div style="height: 12px" />
+                <el-table :data="templates" height="220">
+                  <el-table-column prop="id" label="模板ID" min-width="120" />
+                  <el-table-column prop="name" label="名称" min-width="120" />
+                  <el-table-column prop="version" label="版本" width="80" />
+                  <el-table-column prop="map_type" label="地图" width="100" />
+                </el-table>
+              </el-card>
+              <el-card shadow="hover" class="card">
+                <template #header>
+                  <div class="row-between">
+                    <div class="card-title">任务工单与回放书签</div>
+                    <el-button size="small" :disabled="!matchId" @click="loadTasks">刷新</el-button>
+                  </div>
+                </template>
+                <div class="row mb12">
+                  <div class="col"><el-input v-model="taskForm.title" placeholder="任务标题" /></div>
+                  <div class="col"><el-input v-model="taskForm.assignee" placeholder="负责人" /></div>
+                </div>
+                <div class="row mb12">
+                  <div class="col"><el-input v-model="taskForm.category" placeholder="分类" /></div>
+                  <div class="col">
+                    <el-select v-model="taskForm.status" style="width: 100%">
+                      <el-option label="待处理" value="todo" />
+                      <el-option label="处理中" value="doing" />
+                      <el-option label="已完成" value="done" />
+                    </el-select>
+                  </div>
+                </div>
+                <el-button type="primary" :disabled="!matchId" @click="createTask">创建工单</el-button>
+                <div style="height: 12px" />
+                <el-table :data="tasks" height="150">
+                  <el-table-column prop="title" label="任务" min-width="140" />
+                  <el-table-column prop="status" label="状态" width="100" />
+                  <el-table-column prop="assignee" label="负责人" width="120" />
+                </el-table>
+                <el-divider />
+                <div class="row mb12">
+                  <div class="col"><el-input-number v-model="bookmarkForm.seq" :min="1" style="width: 100%" /></div>
+                  <div class="col"><el-input v-model="bookmarkForm.title" placeholder="书签标题" /></div>
+                </div>
+                <el-button :disabled="!matchId" @click="createBookmark">保存书签</el-button>
+              </el-card>
+            </div>
+            <div class="grid">
+              <el-card shadow="hover" class="card">
+                <template #header>
+                  <div class="row-between">
+                    <div class="card-title">KPI 与趋势</div>
+                    <el-button size="small" :disabled="!matchId" @click="loadKpi">刷新</el-button>
+                  </div>
+                </template>
+                <div class="row">
+                  <div class="col"><div class="label">总事件数</div><div class="score">{{ kpi.total_events ?? 0 }}</div></div>
+                  <div class="col"><div class="label">有效攻击率</div><div class="score">{{ formatRate(kpi.effective_attack_rate) }}</div></div>
+                  <div class="col"><div class="label">溯源成功率</div><div class="score">{{ formatRate(kpi.trace_success_rate) }}</div></div>
+                  <div class="col"><div class="label">净分差</div><div class="score">{{ kpi.net_score_diff ?? 0 }}</div></div>
+                </div>
+                <div style="height: 12px" />
+                <el-table :data="trendRows" height="180">
+                  <el-table-column prop="dimension" label="维度" min-width="100" />
+                  <el-table-column prop="key" label="项" min-width="120" />
+                  <el-table-column prop="value" label="数值" min-width="120" />
+                </el-table>
+              </el-card>
+              <el-card shadow="hover" class="card">
+                <template #header>
+                  <div class="row-between">
+                    <div class="card-title">复盘报告与审计日志</div>
+                    <el-button size="small" :disabled="!matchId" @click="loadAuditLogs">刷新</el-button>
+                  </div>
+                </template>
+                <div class="row mb12">
+                  <el-select v-model="reportMode" style="width: 180px">
+                    <el-option label="领导简版" value="leader" />
+                    <el-option label="技术详版" value="tech" />
+                  </el-select>
+                  <el-button type="primary" :disabled="!matchId" @click="generateReport">生成 Markdown 报告</el-button>
+                </div>
+                <div class="mono" style="margin-top: 10px; max-height: 160px; overflow: auto; white-space: pre-wrap;">{{ reportMarkdown }}</div>
+                <el-divider />
+                <el-table :data="auditLogs" height="180">
+                  <el-table-column prop="actor" label="操作人" width="110" />
+                  <el-table-column prop="module" label="模块" width="110" />
+                  <el-table-column prop="action" label="动作" min-width="120" />
+                  <el-table-column prop="created_at" label="时间" min-width="120" />
+                </el-table>
+              </el-card>
+            </div>
+          </div>
 
           <!-- 新增/编辑队伍弹窗 -->
           <el-dialog
@@ -727,7 +907,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import axios from "axios";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { UploadRequestOptions } from "element-plus";
@@ -827,6 +1007,16 @@ const isAuthed = computed(() => !!authToken.value);
 const loginForm = reactive({ username: "", password: "" });
 const loginSubmitting = ref(false);
 const loginPeek = ref(false);
+const loginErrorPulse = ref(false);
+const sloganTimer = ref<number | null>(null);
+const sloganIndex = ref(0);
+const slogans = [
+  "Blue Team Defense · Real-time Telemetry",
+  "Red Team Attack Paths · Visualized",
+  "Judge Actions · Event-driven Replay",
+  "One Match ID · Multi-screen Sync",
+];
+const activeSlogan = computed(() => slogans[sloganIndex.value % slogans.length]);
 
 if (authToken.value) {
   axiosClient.defaults.headers.common.Authorization = `Bearer ${authToken.value}`;
@@ -845,6 +1035,22 @@ axiosClient.interceptors.response.use(
   }
 );
 
+async function requestWithRetry<T>(runner: () => Promise<T>, retries = 2, delayMs = 350): Promise<T> {
+  let lastErr: any;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await runner();
+    } catch (e: any) {
+      lastErr = e;
+      const status = e?.response?.status;
+      const retryable = !status || status >= 500;
+      if (!retryable || i === retries) break;
+      await new Promise((resolve) => setTimeout(resolve, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function doLogin() {
   loginSubmitting.value = true;
   try {
@@ -862,14 +1068,30 @@ async function doLogin() {
     await fetchMatches();
     await fetchState();
     await fetchTeams();
+    await loadTemplates();
+    await loadTasks();
+    await loadKpi();
+    await loadAuditLogs();
   } catch (e: any) {
+    loginErrorPulse.value = true;
+    window.setTimeout(() => {
+      loginErrorPulse.value = false;
+    }, 420);
     ElMessage.error(e?.response?.data?.error ?? "登录失败");
   } finally {
     loginSubmitting.value = false;
   }
 }
 
-type AdminSection = "combat" | "screen" | "broadcast" | "maintenance" | "teams";
+function doLogout() {
+  authToken.value = "";
+  loginForm.password = "";
+  localStorage.removeItem("rb_jwt");
+  delete axiosClient.defaults.headers.common.Authorization;
+  ElMessage.success("已退出登录");
+}
+
+type AdminSection = "combat" | "screen" | "broadcast" | "maintenance" | "teams" | "ops";
 const activeSection = ref<AdminSection>("combat");
 const matches = ref<{ id: string; map_type: string; leaderboard_visible: boolean }[]>([]);
 const matchId = ref("");
@@ -893,6 +1115,36 @@ const leaderboardBgPreview = computed(() => {
   return u;
 });
 const replaySpeedOnScreen = ref(8);
+const templates = ref<any[]>([]);
+const selectedTemplateId = ref("");
+const templateForm = reactive({
+  id: "",
+  name: "",
+  map_type: "china",
+  attack_types_csv: "",
+});
+const tasks = ref<any[]>([]);
+const taskForm = reactive({
+  category: "attack",
+  title: "",
+  status: "todo",
+  assignee: "",
+});
+const bookmarkForm = reactive({
+  seq: 1,
+  title: "",
+});
+const kpi = ref<any>({});
+const trends = ref<Record<string, any[]>>({});
+const reportMarkdown = ref("");
+const auditLogs = ref<any[]>([]);
+const reportMode = ref<"leader" | "tech">("leader");
+const teamImportCSV = ref("name,type,members\n红队一,red,成员A|成员B\n蓝队一,blue,成员C|成员D");
+const broadcastTemplates = ref([
+  "演练进入最后30分钟，请各队聚焦关键目标。",
+  "裁判提示：请同步提交证据材料。",
+  "请各队确认当前比分与事件序列。",
+]);
 
 const teams = ref<TeamDTO[]>([]);
 const redTeams = computed(() => teams.value.filter((t) => t.type === "red"));
@@ -1251,7 +1503,7 @@ function removeAttackType(type: string) {
 async function createMatch() {
   isSubmitting.value = true;
   try {
-    const res = await axiosClient.post("/api/matches", {});
+    const res = await axiosClient.post("/api/matches", { template_id: selectedTemplateId.value || "" });
     const id = res.data.match_id;
     ElMessage.success("已创建新场次");
     matchId.value = id;
@@ -1302,6 +1554,9 @@ async function onMatchChange() {
   if (!matchId.value) return;
   await fetchState();
   await fetchTeams();
+  await loadTasks();
+  await loadKpi();
+  await loadAuditLogs();
 }
 
 async function submitCommand(eventType: string, payload: any) {
@@ -1538,12 +1793,21 @@ const replayEvents = ref<
     payload_preview: string;
   }>
 >([]);
+const eventFilter = reactive({
+  attack_type: "",
+  status: "",
+  min_score: 0,
+});
 
 async function loadReplayEvents() {
   if (!requireMatch()) return;
   replayLoading.value = true;
   try {
-    const res = await axiosClient.get(`/api/matches/${matchId.value}/events`, { params: { from_seq: 1, limit: 5000 } });
+    const params: any = { from_seq: 1, limit: 5000 };
+    if (eventFilter.attack_type.trim()) params.attack_type = eventFilter.attack_type.trim();
+    if (eventFilter.status.trim()) params.status = eventFilter.status.trim();
+    if (eventFilter.min_score > 0) params.min_score = eventFilter.min_score;
+    const res = await requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/events_enhanced`, { params }));
     const evs = res.data.events ?? [];
     replayEvents.value = evs.map((ev: any) => {
       const payloadObj = ev.payload_raw ?? ev.PayloadRaw ?? ev.payloadRaw ?? ev.payload_json ?? ev.payload;
@@ -1562,25 +1826,200 @@ async function loadReplayEvents() {
   }
 }
 
+function formatRate(v: number | undefined) {
+  const n = Number(v ?? 0);
+  return `${(n * 100).toFixed(1)}%`;
+}
+const trendRows = computed(() =>
+  Object.entries(trends.value ?? {}).flatMap(([dimension, list]) =>
+    (list ?? []).map((x: any) => ({
+      dimension,
+      key: x.key,
+      value: x.value,
+    }))
+  )
+);
+
+async function loadTemplates() {
+  try {
+    const res = await requestWithRetry(() => axiosClient.get("/api/match_templates"));
+    templates.value = res.data.templates ?? [];
+  } catch {
+    ElMessage.error("模板加载失败");
+  }
+}
+
+async function saveTemplate() {
+  try {
+    await axiosClient.post("/api/match_templates", {
+      id: templateForm.id.trim(),
+      name: templateForm.name.trim(),
+      map_type: templateForm.map_type.trim() || "china",
+      version: 1,
+      attack_types: templateForm.attack_types_csv.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+      cities: mapMode.value === "china" ? CITIES_CHINA : CITIES_TAIZHOU,
+      score_rules: { attack_success: 100, trace_success: 80 },
+      audio_config: { bgm_enabled: bgmEnabled.value, success_sfx_enabled: successSfxEnabled.value },
+      change_log: "admin 创建/更新模板",
+    });
+    ElMessage.success("模板已保存");
+    await loadTemplates();
+  } catch {
+    ElMessage.error("模板保存失败");
+  }
+}
+
+async function loadTasks() {
+  if (!matchId.value) return;
+  try {
+    const res = await requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/tasks`));
+    tasks.value = res.data.tasks ?? [];
+  } catch {
+    ElMessage.error("工单加载失败");
+  }
+}
+
+async function createTask() {
+  if (!matchId.value) return;
+  try {
+    await axiosClient.post(`/api/matches/${matchId.value}/tasks`, {
+      category: taskForm.category,
+      title: taskForm.title,
+      status: taskForm.status,
+      assignee: taskForm.assignee,
+      payload: { source: "admin" },
+    });
+    ElMessage.success("工单已创建");
+    taskForm.title = "";
+    await loadTasks();
+  } catch {
+    ElMessage.error("工单创建失败");
+  }
+}
+
+async function createBookmark() {
+  if (!matchId.value) return;
+  try {
+    await axiosClient.post(`/api/matches/${matchId.value}/bookmarks`, {
+      seq: bookmarkForm.seq,
+      title: bookmarkForm.title || `Seq ${bookmarkForm.seq}`,
+      note: "管理员书签",
+    });
+    ElMessage.success("书签已保存");
+  } catch {
+    ElMessage.error("书签保存失败");
+  }
+}
+
+async function loadKpi() {
+  if (!matchId.value) return;
+  try {
+    const [kpiRes, trendRes] = await Promise.all([
+      requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/analytics/kpi`)),
+      requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/analytics/trends`)),
+    ]);
+    kpi.value = kpiRes.data.kpi ?? {};
+    trends.value = trendRes.data.trends ?? {};
+  } catch {
+    ElMessage.error("KPI 加载失败");
+  }
+}
+
+async function generateReport() {
+  if (!matchId.value) return;
+  try {
+    const res = await axiosClient.get(`/api/matches/${matchId.value}/report`, { params: { mode: reportMode.value } });
+    reportMarkdown.value = String(res.data.markdown ?? "");
+  } catch {
+    ElMessage.error("报告生成失败");
+  }
+}
+
+async function loadAuditLogs() {
+  if (!matchId.value) return;
+  try {
+    const res = await requestWithRetry(() => axiosClient.get(`/api/matches/${matchId.value}/audit_logs`));
+    auditLogs.value = res.data.audit_logs ?? [];
+  } catch {
+    ElMessage.error("审计日志加载失败");
+  }
+}
+
+function handleAdminHotkeys(e: KeyboardEvent) {
+  if (!isAuthed.value) return;
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const key = e.key.toLowerCase();
+  if (key === "b") {
+    e.preventDefault();
+    if (broadcastMsg.value.trim()) void submitBroadcast();
+  } else if (key === "r") {
+    e.preventDefault();
+    void startReplayOnScreen();
+  } else if (key === "m") {
+    e.preventDefault();
+    if (audioPlaying.bgm) stopBgm();
+    else void testBgm();
+  }
+}
+
+async function importTeamsByCSV() {
+  if (!matchId.value) return;
+  try {
+    await axiosClient.post(`/api/matches/${matchId.value}/teams/import`, { csv_text: teamImportCSV.value });
+    ElMessage.success("CSV导入完成");
+    await fetchTeams();
+  } catch {
+    ElMessage.error("CSV导入失败");
+  }
+}
+
+async function bulkSyncTeams() {
+  if (!matchId.value) return;
+  try {
+    await axiosClient.put(`/api/matches/${matchId.value}/teams/batch_update`, { teams: teams.value });
+    ElMessage.success("批量同步完成");
+    await fetchTeams();
+  } catch {
+    ElMessage.error("批量同步失败");
+  }
+}
+
 onMounted(async () => {
+  sloganTimer.value = window.setInterval(() => {
+    sloganIndex.value = (sloganIndex.value + 1) % slogans.length;
+  }, 2600);
   if (!isAuthed.value) return;
   await fetchMatches();
   await fetchState();
   await fetchTeams();
+  await loadTemplates();
+  window.addEventListener("keydown", handleAdminHotkeys);
+});
+
+onBeforeUnmount(() => {
+  if (sloganTimer.value != null) {
+    window.clearInterval(sloganTimer.value);
+    sloganTimer.value = null;
+  }
+  window.removeEventListener("keydown", handleAdminHotkeys);
 });
 </script>
 
 <style scoped>
 .admin-root {
   min-height: 100vh;
-  background: #f6f7fb;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.16), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(139, 92, 246, 0.16), transparent 34%),
+    #edf2ff;
   color: #111827;
 }
 .admin-header {
-  height: 64px;
-  background: linear-gradient(90deg, #ffffff, #f8fafc);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.3);
-  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+  height: 72px;
+  background: rgba(255, 255, 255, 0.72);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(9px);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1592,16 +2031,21 @@ onMounted(async () => {
   gap: 12px;
 }
 .admin-logo {
-  width: 10px;
-  height: 10px;
-  background: #2563eb;
-  border-radius: 2px;
-  box-shadow: 0 0 0 rgba(37, 99, 235, 0);
+  width: 12px;
+  height: 32px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #2563eb, #7c3aed);
+  box-shadow: 0 8px 16px rgba(59, 130, 246, 0.35);
 }
 .admin-title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: #111827;
+}
+.admin-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(17, 24, 39, 0.48);
 }
 .admin-header-right {
   display: flex;
@@ -1610,7 +2054,7 @@ onMounted(async () => {
 }
 .admin-body {
   padding: 0;
-  height: calc(100vh - 64px);
+  height: calc(100vh - 72px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1625,7 +2069,7 @@ onMounted(async () => {
 .admin-sidebar {
   width: 268px;
   flex: 0 0 268px;
-  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(248, 250, 252, 0.86));
   border-right: 1px solid rgba(148, 163, 184, 0.25);
   padding: 16px 12px;
   display: flex;
@@ -1660,7 +2104,7 @@ onMounted(async () => {
 
 .nav-card {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   width: 100%;
   text-align: left;
@@ -1694,8 +2138,24 @@ onMounted(async () => {
 
 .nav-card-ico {
   flex: 0 0 auto;
-  font-size: 1.35rem;
-  line-height: 1.2;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.12);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  line-height: 1;
+}
+.nav-card-warn .nav-card-ico {
+  color: #b91c1c;
+  background: rgba(220, 38, 38, 0.1);
+  border-color: rgba(220, 38, 38, 0.18);
 }
 .nav-card-body {
   min-width: 0;
@@ -1717,7 +2177,7 @@ onMounted(async () => {
   min-width: 0;
   overflow-y: auto;
   padding: 18px 20px 28px;
-  background: #f6f7fb;
+  background: transparent;
 }
 
 .admin-section {
@@ -1777,10 +2237,11 @@ onMounted(async () => {
   }
 }
 .card {
-  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(248, 250, 252, 0.92));
   border: 1px solid rgba(148, 163, 184, 0.25);
   border-radius: 14px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(4px);
 }
 .small {
   height: 100%;
@@ -1879,6 +2340,29 @@ onMounted(async () => {
     radial-gradient(circle at 92% 88%, rgba(99, 102, 241, 0.22), transparent 38%),
     linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.9));
 }
+.login-orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(2px);
+  opacity: 0.55;
+  pointer-events: none;
+  animation: orbFloat 9s ease-in-out infinite;
+}
+.orb-a {
+  width: 220px;
+  height: 220px;
+  left: 8%;
+  top: 14%;
+  background: radial-gradient(circle at 30% 30%, rgba(147, 197, 253, 0.9), rgba(59, 130, 246, 0.06));
+}
+.orb-b {
+  width: 260px;
+  height: 260px;
+  right: 7%;
+  bottom: 10%;
+  animation-delay: 1.8s;
+  background: radial-gradient(circle at 30% 30%, rgba(196, 181, 253, 0.9), rgba(124, 58, 237, 0.06));
+}
 .admin-login-shell {
   width: min(980px, 100%);
   min-height: 520px;
@@ -1927,6 +2411,35 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 10px;
 }
+.login-feature-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: rgba(226, 232, 240, 0.88);
+  font-size: 12px;
+  line-height: 1.55;
+  display: grid;
+  gap: 6px;
+}
+.login-slogan-rotator {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  background: rgba(15, 23, 42, 0.32);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rotator-label {
+  font-size: 10px;
+  color: rgba(125, 211, 252, 0.85);
+  letter-spacing: 0.18em;
+}
+.rotator-text {
+  font-size: 13px;
+  color: #f8fafc;
+  letter-spacing: 0.02em;
+}
 .login-tag {
   padding: 5px 10px;
   border-radius: 999px;
@@ -1942,6 +2455,9 @@ onMounted(async () => {
   flex-direction: column;
   justify-content: center;
   position: relative;
+}
+.admin-login-card.login-error {
+  animation: loginShake 0.38s ease;
 }
 .admin-login-card-head {
   margin-bottom: 8px;
@@ -2033,15 +2549,55 @@ onMounted(async () => {
 }
 .admin-login-submit {
   width: 100%;
-  height: 42px;
+  height: 44px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.admin-login-submit:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.35);
 }
 .admin-login-hint {
   margin-top: 14px;
   font-size: 12px;
   color: rgba(226, 232, 240, 0.9);
   text-align: center;
+}
+:deep(.neon-input .el-input__wrapper) {
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+:deep(.neon-input .el-input__wrapper.is-focus) {
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.65),
+    0 0 0 4px rgba(59, 130, 246, 0.18) !important;
+}
+@keyframes loginShake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-7px);
+  }
+  40% {
+    transform: translateX(7px);
+  }
+  60% {
+    transform: translateX(-5px);
+  }
+  80% {
+    transform: translateX(5px);
+  }
+}
+@keyframes orbFloat {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-16px);
+  }
 }
 @media (max-width: 900px) {
   .admin-login-shell {
@@ -2067,4 +2623,3 @@ body {
   overflow: auto !important;
 }
 </style>
-
