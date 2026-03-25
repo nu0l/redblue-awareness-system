@@ -78,6 +78,54 @@ func (s *Store) migrate() error {
 			FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_match_seq ON events(match_id, seq);`,
+		`CREATE TABLE IF NOT EXISTS match_templates (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			version INTEGER NOT NULL DEFAULT 1,
+			map_type TEXT NOT NULL,
+			cities_json TEXT NOT NULL DEFAULT '[]',
+			attack_types_json TEXT NOT NULL DEFAULT '[]',
+			audio_config_json TEXT NOT NULL DEFAULT '{}',
+			score_rules_json TEXT NOT NULL DEFAULT '{}',
+			change_log TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			match_id TEXT NOT NULL,
+			category TEXT NOT NULL,
+			title TEXT NOT NULL,
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL,
+			assignee TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_match_status ON tasks(match_id, status, updated_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS event_bookmarks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			match_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			title TEXT NOT NULL,
+			note TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_bookmarks_match_seq ON event_bookmarks(match_id, seq);`,
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			match_id TEXT NOT NULL,
+			actor TEXT NOT NULL,
+			role TEXT NOT NULL,
+			module TEXT NOT NULL,
+			action TEXT NOT NULL,
+			before_json TEXT NOT NULL DEFAULT '',
+			after_json TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_match_time ON audit_logs(match_id, created_at DESC);`,
 	}
 
 	for _, stmt := range stmts {
@@ -218,17 +266,17 @@ func (s *Store) GetMatchPanels(
 	matchID string,
 ) (mapType string, leaderboardVisible bool, panels map[string]bool, screenTitle string, screenOrganizer string, screenSupporter string, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
 	var (
-		mapTypeDB         string
-		leaderboardInt    int
-		panelsJSON        string
-		screenTitleDB     string
-		screenOrganizerDB string
-		screenSupporterDB string
-		leaderboardBGDB   string
-		bgmURLDB          string
-		bgmEnabledInt     int
-		successSFXURLDB   string
-		successSFXEnabledInt int
+		mapTypeDB              string
+		leaderboardInt         int
+		panelsJSON             string
+		screenTitleDB          string
+		screenOrganizerDB      string
+		screenSupporterDB      string
+		leaderboardBGDB        string
+		bgmURLDB               string
+		bgmEnabledInt          int
+		successSFXURLDB        string
+		successSFXEnabledInt   int
 		leaderboardMainAlphaDB float64
 	)
 	err = s.db.QueryRow(
@@ -358,14 +406,14 @@ func (s *Store) GetMatchInitialConfig(
 	matchID string,
 ) (mapType string, leaderboardVisible bool, panels map[string]bool, screenTitle string, screenOrganizer string, screenSupporter string, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
 	var (
-		mapTypeDB       string
-		lvInt           int
-		panelsJSON      string
-		leaderboardBGDB string
-		bgmURLDB        string
-		bgmEnabledInt   int
-		successSFXURLDB string
-		successSFXEnabledInt int
+		mapTypeDB              string
+		lvInt                  int
+		panelsJSON             string
+		leaderboardBGDB        string
+		bgmURLDB               string
+		bgmEnabledInt          int
+		successSFXURLDB        string
+		successSFXEnabledInt   int
 		leaderboardMainAlphaDB float64
 	)
 	row := s.db.QueryRow(
@@ -425,7 +473,7 @@ func (s *Store) ListTeams(matchID string) ([]protocol.TeamDTO, error) {
 func (s *Store) CreateTeam(matchID string, team protocol.TeamDTO) (int, error) {
 	// score/initial_score 由上层传入，保证 reset 时可用（目前 reset 先不做）。
 	if strings.TrimSpace(team.Logo) == "" {
-		team.Logo = "?";
+		team.Logo = "?"
 	}
 	membersJSON, err := json.Marshal(team.Members)
 	if err != nil {
@@ -445,7 +493,7 @@ func (s *Store) CreateTeam(matchID string, team protocol.TeamDTO) (int, error) {
 
 func (s *Store) UpdateTeam(matchID string, teamID int, team protocol.TeamDTO) error {
 	if strings.TrimSpace(team.Logo) == "" {
-		team.Logo = "?";
+		team.Logo = "?"
 	}
 	membersJSON, err := json.Marshal(team.Members)
 	if err != nil {
@@ -484,9 +532,9 @@ func (s *Store) GetLastSeq(matchID string) (uint64, error) {
 
 type EventRecord struct {
 	Seq        uint64          `json:"seq"`
-	EventType  string         `json:"event_type"`
+	EventType  string          `json:"event_type"`
 	PayloadRaw json.RawMessage `json:"payload_raw"`
-	Timestamp  int64          `json:"timestamp"`
+	Timestamp  int64           `json:"timestamp"`
 }
 
 func (s *Store) InsertEvent(matchID string, seq uint64, eventType string, payload any) error {
@@ -534,4 +582,3 @@ func (s *Store) ListEvents(matchID string, fromSeq uint64, limit int) ([]EventRe
 	}
 	return out, rows.Err()
 }
-

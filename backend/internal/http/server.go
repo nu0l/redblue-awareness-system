@@ -1,6 +1,8 @@
 package httpserver
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -28,6 +30,10 @@ type Server struct {
 	hub        *ws.Hub
 	uploadsDir string
 	upgrader   websocket.Upgrader
+}
+
+func isAdminRole(role string) bool {
+	return role == "admin" || role == "super_admin"
 }
 
 func NewServer(store *db.Store, matcher *match.Service, hub *ws.Hub, uploadsDir string) *Server {
@@ -94,6 +100,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/api/matches", s.handleMatchesRoot)
 	mux.HandleFunc("/api/matches/", s.handleMatchesSub)
+	mux.HandleFunc("/api/match_templates", s.handleMatchTemplatesRoot)
+	mux.HandleFunc("/api/match_templates/", s.handleMatchTemplatesSub)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -233,27 +241,40 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wantUser := strings.TrimSpace(os.Getenv("ADMIN_USERNAME"))
-	wantPass := strings.TrimSpace(os.Getenv("ADMIN_PASSWORD"))
-	if wantUser == "" || wantPass == "" {
+	accounts := []struct {
+		user string
+		pass string
+		role string
+	}{
+		{strings.TrimSpace(os.Getenv("SUPER_ADMIN_USERNAME")), strings.TrimSpace(os.Getenv("SUPER_ADMIN_PASSWORD")), "super_admin"},
+		{strings.TrimSpace(os.Getenv("ADMIN_USERNAME")), strings.TrimSpace(os.Getenv("ADMIN_PASSWORD")), "admin"},
+		{strings.TrimSpace(os.Getenv("JUDGE_USERNAME")), strings.TrimSpace(os.Getenv("JUDGE_PASSWORD")), "judge"},
+		{strings.TrimSpace(os.Getenv("OBSERVER_USERNAME")), strings.TrimSpace(os.Getenv("OBSERVER_PASSWORD")), "observer"},
+	}
+	found := false
+	role := ""
+	for _, a := range accounts {
+		if a.user == "" || a.pass == "" {
+			continue
+		}
+		if req.Username == a.user && subtleTimeEqual(req.Password, a.pass) {
+			found = true
+			role = a.role
+			break
+		}
+	}
+	if !found && strings.TrimSpace(os.Getenv("ADMIN_USERNAME")) == "" {
 		auditLoginFailure(r, req.Username, "admin_not_configured")
 		http.Error(w, "admin credentials are not configured", http.StatusInternalServerError)
 		return
 	}
-
-	// constant-time compare on password
-	if req.Username != wantUser {
-		auditLoginFailure(r, req.Username, "invalid_username_or_password")
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	if subtleTimeEqual(req.Password, wantPass) == false {
+	if !found {
 		auditLoginFailure(r, req.Username, "invalid_username_or_password")
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
-	token, err := signJWT(req.Username, "admin", 7*24*time.Hour)
+	token, err := signJWT(req.Username, role, 7*24*time.Hour)
 	if err != nil {
 		auditLoginFailure(r, req.Username, "token_sign_error")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -263,6 +284,7 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	auditLoginSuccess(r, req.Username)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"token": token,
+		"role":  role,
 	})
 }
 
@@ -430,19 +452,25 @@ func (s *Server) handleMatchesRoot(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"matches": list})
 	case http.MethodPost:
 		// 创建新场次只允许 admin
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
 
 		// 创建新场次（match_id 即为一个独立演练，用于多场同时与历史复盘）
 		var req struct {
-			MapType string `json:"map_type"`
+			MapType    string `json:"map_type"`
+			TemplateID string `json:"template_id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		mapType := req.MapType
 		if mapType == "" {
 			mapType = "china"
+		}
+		if strings.TrimSpace(req.TemplateID) != "" {
+			if tpl, err := s.store.GetMatchTemplate(strings.TrimSpace(req.TemplateID)); err == nil && strings.TrimSpace(tpl.MapType) != "" {
+				mapType = tpl.MapType
+			}
 		}
 
 		if mapType != "china" && mapType != "taizhou" {
@@ -495,9 +523,13 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.handleMatchAdvancedEndpoints(w, r, claims, matchID, parts) {
+		return
+	}
+
 	// /api/matches/{match_id}/leaderboard_background  （得分总榜背景图上传/清除）
 	if len(parts) == 2 && parts[1] == "leaderboard_background" {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -514,7 +546,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/audio_upload/{kind} （kind: bgm | success_sfx）
 	if len(parts) == 3 && parts[1] == "audio_upload" && r.Method == http.MethodPost {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -560,7 +592,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, map[string]any{"teams": teams})
 		case http.MethodPost:
-			if claims.Role != "admin" {
+			if !isAdminRole(claims.Role) {
 				respondForbidden(w, r)
 				return
 			}
@@ -601,9 +633,91 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/matches/{match_id}/teams/import
+	if len(parts) == 3 && parts[1] == "teams" && parts[2] == "import" && r.Method == http.MethodPost {
+		if !isAdminRole(claims.Role) {
+			respondForbidden(w, r)
+			return
+		}
+		var req struct {
+			CSVText string `json:"csv_text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		reader := csv.NewReader(bytes.NewBufferString(req.CSVText))
+		rows, err := reader.ReadAll()
+		if err != nil {
+			http.Error(w, "invalid csv", http.StatusBadRequest)
+			return
+		}
+		created := 0
+		for i, row := range rows {
+			if i == 0 && len(row) >= 2 && strings.Contains(strings.ToLower(row[0]), "name") {
+				continue
+			}
+			if len(row) < 2 {
+				continue
+			}
+			name := strings.TrimSpace(row[0])
+			typ := strings.TrimSpace(row[1])
+			if name == "" || (typ != "red" && typ != "blue") {
+				continue
+			}
+			dto := protocol.TeamDTO{
+				Name:    name,
+				Type:    typ,
+				Logo:    "?",
+				Score:   0,
+				Members: []string{},
+			}
+			if len(row) >= 3 && strings.TrimSpace(row[2]) != "" {
+				dto.Members = strings.Split(strings.TrimSpace(row[2]), "|")
+			}
+			if _, err := s.store.CreateTeam(matchID, dto); err == nil {
+				created++
+			}
+		}
+		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{EventType: "teams_updated", Data: json.RawMessage(`{}`)}); err == nil {
+			s.hub.Broadcast(matchID, *wsMsg)
+		}
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "import_csv", After: req.CSVText})
+		writeJSON(w, map[string]any{"ok": true, "created": created})
+		return
+	}
+
+	// /api/matches/{match_id}/teams/batch_update
+	if len(parts) == 3 && parts[1] == "teams" && parts[2] == "batch_update" && r.Method == http.MethodPut {
+		if !isAdminRole(claims.Role) {
+			respondForbidden(w, r)
+			return
+		}
+		var req struct {
+			Teams []protocol.TeamDTO `json:"teams"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		for _, t := range req.Teams {
+			if t.ID > 0 {
+				_ = s.store.UpdateTeam(matchID, t.ID, t)
+				continue
+			}
+			_, _ = s.store.CreateTeam(matchID, t)
+		}
+		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{EventType: "teams_updated", Data: json.RawMessage(`{}`)}); err == nil {
+			s.hub.Broadcast(matchID, *wsMsg)
+		}
+		_ = s.store.CreateAuditLog(db.AuditLog{MatchID: matchID, Actor: claims.Sub, Role: claims.Role, Module: "teams", Action: "batch_update", After: "bulk"})
+		writeJSON(w, map[string]any{"ok": true, "updated": len(req.Teams)})
+		return
+	}
+
 	// /api/matches/{match_id}/teams/{team_id}
 	if len(parts) == 3 && parts[1] == "teams" && r.Method == http.MethodPut {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -634,19 +748,19 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to update team", http.StatusInternalServerError)
 			return
 		}
-			// 推送状态刷新到大屏
-			if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{
-				EventType: "teams_updated",
-				Data:      json.RawMessage(`{}`),
-			}); err == nil {
-				s.hub.Broadcast(matchID, *wsMsg)
-			}
+		// 推送状态刷新到大屏
+		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{
+			EventType: "teams_updated",
+			Data:      json.RawMessage(`{}`),
+		}); err == nil {
+			s.hub.Broadcast(matchID, *wsMsg)
+		}
 		auditTeamMutation(r, claims, matchID, "update", teamID)
 		writeJSON(w, map[string]any{"ok": true})
 		return
 	}
 	if len(parts) == 3 && parts[1] == "teams" && r.Method == http.MethodDelete {
-		if claims.Role != "admin" {
+		if !isAdminRole(claims.Role) {
 			respondForbidden(w, r)
 			return
 		}
@@ -660,12 +774,12 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to delete team", http.StatusInternalServerError)
 			return
 		}
-			if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{
-				EventType: "teams_updated",
-				Data:      json.RawMessage(`{}`),
-			}); err == nil {
-				s.hub.Broadcast(matchID, *wsMsg)
-			}
+		if wsMsg, err := s.matcher.ApplyCommand(matchID, match.CmdMessage{
+			EventType: "teams_updated",
+			Data:      json.RawMessage(`{}`),
+		}); err == nil {
+			s.hub.Broadcast(matchID, *wsMsg)
+		}
 		auditTeamMutation(r, claims, matchID, "delete", teamID)
 		writeJSON(w, map[string]any{"ok": true})
 		return
@@ -698,7 +812,7 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 
 	// /api/matches/{match_id}/command
 	if len(parts) == 2 && parts[1] == "command" && r.Method == http.MethodPost {
-		if claims.Role != "admin" {
+		if claims.Role == "observer" {
 			respondForbidden(w, r)
 			return
 		}
@@ -717,6 +831,26 @@ func (s *Server) handleMatchesSub(w http.ResponseWriter, r *http.Request) {
 		// 广播事件与同步态
 		s.hub.Broadcast(matchID, *wsMsg)
 		auditAdminCommand(r, claims, matchID, req.EventType, wsMsg.Seq)
+		_ = s.store.CreateAuditLog(db.AuditLog{
+			MatchID: matchID,
+			Actor:   claims.Sub,
+			Role:    claims.Role,
+			Module:  "command",
+			Action:  req.EventType,
+			After:   string(req.Data),
+		})
+		switch req.EventType {
+		case "attack_success", "manual_score", "system_broadcast":
+			_, _ = s.store.CreateTask(db.TaskItem{
+				MatchID:   matchID,
+				Category:  req.EventType,
+				Title:     "自动任务：" + req.EventType,
+				Status:    "done",
+				Assignee:  claims.Sub,
+				CreatedBy: claims.Sub,
+				Payload:   req.Data,
+			})
+		}
 		writeJSON(w, map[string]any{"ok": true, "seq": wsMsg.Seq})
 		return
 	}
@@ -1001,4 +1135,3 @@ func withCORS(h http.Handler) http.Handler {
 		h.ServeHTTP(w, r)
 	})
 }
-

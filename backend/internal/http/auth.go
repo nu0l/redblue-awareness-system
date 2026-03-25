@@ -155,9 +155,14 @@ func requireRole(r *http.Request, want string) (*JWTClaims, error) {
 	if err != nil {
 		return nil, err
 	}
-	if want != "" && claims.Role != want {
-		return nil, ErrForbidden
+	if want != "" {
+		if want == "admin" {
+			if claims.Role != "admin" && claims.Role != "super_admin" {
+				return nil, ErrForbidden
+			}
+		} else if claims.Role != want {
+			return nil, ErrForbidden
+		}
 	}
 	return claims, nil
 }
-
