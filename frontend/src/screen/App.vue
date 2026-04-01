@@ -1308,6 +1308,7 @@ const mapEl = ref<HTMLElement | null>(null);
 const mapTeamDockEl = ref<HTMLElement | null>(null);
 /** 队伍栏各行与地图左缘对齐后的地理坐标（用于队伍→区县飞线起点） */
 const teamDockGeoCoords = reactive<Record<number, [number, number]>>({});
+let teamDockResizeObs: ResizeObserver | undefined;
 
 let mapChart: echarts.ECharts | null = null;
 const slotChartInstances: Partial<Record<ScreenSlotId, echarts.ECharts>> = {};
@@ -3123,6 +3124,16 @@ onMounted(async () => {
 
   mapChart = echarts.init(mapEl.value);
   mapChart.on("georoam", onMapGeoRoamForDock);
+  try {
+    if ("ResizeObserver" in window) {
+      teamDockResizeObs = new ResizeObserver(() => {
+        updateTeamDockGeoCoords();
+      });
+      if (mapTeamDockEl.value) teamDockResizeObs.observe(mapTeamDockEl.value);
+    }
+  } catch {
+    // ignore
+  }
 
   // 让飞线随时间渐隐，不需要新事件也能保持“持续一段时间”的视觉效果。
   mapLineRefreshTimer = window.setInterval(() => {
@@ -3295,6 +3306,11 @@ onBeforeUnmount(() => {
     mapChart.off("georoam", onMapGeoRoamForDock);
     mapChart.dispose();
     mapChart = null;
+  }
+  try {
+    teamDockResizeObs?.disconnect();
+  } catch {
+    // ignore
   }
   if (resizeHandler) window.removeEventListener("resize", resizeHandler);
   bgmAudioEl.value?.pause();

@@ -374,25 +374,25 @@
               </div>
               <div class="row-between mb8">
                 <div style="min-width: 72px">左上</div>
-                <el-select v-model="screenModLeftTop" size="small" style="width: 280px" filterable>
+                <el-select v-model="screenModLeftTop" size="small" class="admin-w-280" filterable>
                   <el-option v-for="o in screenModuleOptions" :key="o.value" :label="o.label" :value="o.value" />
                 </el-select>
               </div>
               <div class="row-between mb8">
                 <div style="min-width: 72px">左下</div>
-                <el-select v-model="screenModLeftBottom" size="small" style="width: 280px" filterable>
+                <el-select v-model="screenModLeftBottom" size="small" class="admin-w-280" filterable>
                   <el-option v-for="o in screenModuleOptions" :key="o.value" :label="o.label" :value="o.value" />
                 </el-select>
               </div>
               <div class="row-between mb8">
                 <div style="min-width: 72px">右上</div>
-                <el-select v-model="screenModRightTop" size="small" style="width: 280px" filterable>
+                <el-select v-model="screenModRightTop" size="small" class="admin-w-280" filterable>
                   <el-option v-for="o in screenModuleOptions" :key="o.value" :label="o.label" :value="o.value" />
                 </el-select>
               </div>
               <div class="row-between mb8">
                 <div style="min-width: 72px">右下</div>
-                <el-select v-model="screenModRightBottom" size="small" style="width: 280px" filterable>
+                <el-select v-model="screenModRightBottom" size="small" class="admin-w-280" filterable>
                   <el-option v-for="o in screenModuleOptions" :key="o.value" :label="o.label" :value="o.value" />
                 </el-select>
               </div>
@@ -420,7 +420,7 @@
 
               <div class="row-between mb12">
                 <div>大屏标题</div>
-                <el-input v-model="screenTitle" size="small" style="width: 280px" placeholder="实战化红蓝对抗演练指挥中心" />
+                <el-input v-model="screenTitle" size="small" class="admin-w-280" placeholder="实战化红蓝对抗演练指挥中心" />
               </div>
 
               <el-button
@@ -494,12 +494,12 @@
 
               <div class="row-between mb12">
                 <div>主办方</div>
-                <el-input v-model="screenOrganizer" size="small" style="width: 280px" placeholder="例如：某某战区"></el-input>
+                <el-input v-model="screenOrganizer" size="small" class="admin-w-280" placeholder="例如：某某战区"></el-input>
               </div>
 
               <div class="row-between mb12">
                 <div>支撑方</div>
-                <el-input v-model="screenSupporter" size="small" style="width: 280px" placeholder="例如：某某单位"></el-input>
+                <el-input v-model="screenSupporter" size="small" class="admin-w-280" placeholder="例如：某某单位"></el-input>
               </div>
 
               <div class="row-between mb12">
@@ -536,12 +536,12 @@
 
               <div class="row-between mb12">
                 <div>倒计时到点触发广播内容</div>
-                <el-input v-model="countdownBroadcastMsg" type="textarea" :rows="3" style="width: 280px" placeholder="留空则不广播（到点后自动触发系统通知）" />
+                <el-input v-model="countdownBroadcastMsg" type="textarea" :rows="3" class="admin-w-280" placeholder="留空则不广播（到点后自动触发系统通知）" />
               </div>
 
               <div class="row-between mb12">
                 <div>倒计时到点触发切换面板ID</div>
-                <el-input v-model="countdownTogglePanelID" size="small" style="width: 280px" placeholder="留空则不切换（例如：panel-leaderboard）" />
+                <el-input v-model="countdownTogglePanelID" size="small" class="admin-w-280" placeholder="留空则不切换（例如：panel-leaderboard）" />
               </div>
               <div class="row-between mb12">
                 <div>切换面板可见</div>
@@ -2827,6 +2827,10 @@ watch(auditScope, () => {
 .row {
   display: flex;
   gap: calc(16px * var(--admin-scale));
+}
+
+.admin-w-280 {
+  width: calc(280px * var(--admin-scale));
 }
 .col {
   flex: 1;

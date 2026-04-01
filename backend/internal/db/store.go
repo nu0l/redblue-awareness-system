@@ -78,6 +78,7 @@ func (s *Store) migrate() error {
 			match_id TEXT NOT NULL,
 			seq INTEGER NOT NULL,
 			event_type TEXT NOT NULL,
+			dedupe_key TEXT NOT NULL DEFAULT '',
 			payload_json TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
 			UNIQUE(match_id, seq),
@@ -162,6 +163,11 @@ func (s *Store) migrate() error {
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_triggered INTEGER NOT NULL DEFAULT 0`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN screen_modules_json TEXT NOT NULL DEFAULT ''`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN initial_screen_modules_json TEXT NOT NULL DEFAULT ''`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE events ADD COLUMN dedupe_key TEXT NOT NULL DEFAULT ''`)
+
+	// 幂等去重：同一场次同一事件类型下，dedupe_key 非空时必须唯一。
+	// SQLite 支持部分索引（WHERE 子句）。
+	_, _ = s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe ON events(match_id, event_type, dedupe_key) WHERE TRIM(dedupe_key) <> ''`)
 
 	defScreen := `{"left_top":"leaderboard","left_bottom":"region_attack_rank","right_top":"battle_logs","right_bottom":"attack_type_pie"}`
 	_, _ = s.db.Exec(`UPDATE matches SET screen_modules_json = ? WHERE screen_modules_json IS NULL OR TRIM(screen_modules_json) = ''`, defScreen)
@@ -757,16 +763,33 @@ type EventRecord struct {
 	Timestamp  int64           `json:"timestamp"`
 }
 
-func (s *Store) InsertEvent(matchID string, seq uint64, eventType string, payload any) error {
+func (s *Store) InsertEvent(matchID string, seq uint64, eventType string, payload any, dedupeKey string) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.Exec(
-		`INSERT INTO events(match_id, seq, event_type, payload_json, created_at) VALUES(?, ?, ?, ?, ?)`,
-		matchID, seq, eventType, string(payloadJSON), time.Now().Unix(),
+		`INSERT INTO events(match_id, seq, event_type, dedupe_key, payload_json, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
+		matchID, seq, eventType, strings.TrimSpace(dedupeKey), string(payloadJSON), time.Now().Unix(),
 	)
 	return err
+}
+
+func (s *Store) HasDedupeEvent(matchID string, eventType string, dedupeKey string) (bool, error) {
+	key := strings.TrimSpace(dedupeKey)
+	if key == "" {
+		return false, nil
+	}
+	var cnt int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(1) FROM events WHERE match_id = ? AND event_type = ? AND TRIM(dedupe_key) = ?`,
+		matchID,
+		strings.TrimSpace(eventType),
+		key,
+	).Scan(&cnt); err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
 }
 
 func (s *Store) ListEvents(matchID string, fromSeq uint64, limit int) ([]EventRecord, error) {

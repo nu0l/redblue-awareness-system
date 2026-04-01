@@ -3,6 +3,7 @@ package match
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"math"
 	"sync"
 	"strings"
@@ -446,10 +447,33 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 			ScoreChange int    `json:"score_change"`
 			Message     string `json:"message"`
 			Status      string `json:"status"`
+			DedupeKey   string `json:"dedupe_key"`
 		}
 		if err := json.Unmarshal(cmd.Data, &payload); err != nil {
 			rt.NextSeq-- // 回滚 seq
 			return nil, err
+		}
+		payload.TargetCity = strings.TrimSpace(payload.TargetCity)
+		payload.AttackType = strings.TrimSpace(payload.AttackType)
+		payload.DedupeKey = strings.TrimSpace(payload.DedupeKey)
+		if payload.TargetCity == "" {
+			rt.NextSeq--
+			return nil, errors.New("target_city is required")
+		}
+		if payload.ScoreChange < 0 || payload.ScoreChange > 100000 {
+			rt.NextSeq--
+			return nil, errors.New("score_change out of range")
+		}
+		if payload.DedupeKey != "" {
+			ok, err := s.store.HasDedupeEvent(matchID, "attack_success", payload.DedupeKey)
+			if err != nil {
+				rt.NextSeq--
+				return nil, err
+			}
+			if ok {
+				rt.NextSeq--
+				return nil, errors.New("duplicate dedupe_key")
+			}
 		}
 
 		// 更新红队（发起方）比分
@@ -478,7 +502,9 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 			for i := range rt.Teams {
 				if rt.Teams[i].Type == "blue" {
 					rt.Teams[i].Score -= deltaBlue
-					_ = s.store.UpdateTeamScore(rt.ID, rt.Teams[i].ID, rt.Teams[i].Score)
+					if err := s.store.UpdateTeamScore(rt.ID, rt.Teams[i].ID, rt.Teams[i].Score); err != nil {
+						log.Printf("[WARN] blue score update failed match=%s team=%d err=%v", rt.ID, rt.Teams[i].ID, err)
+					}
 				}
 			}
 		}
@@ -487,7 +513,7 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 		if payload.AttackType != "" {
 			rt.AttackStats[payload.AttackType]++
 		}
-		if strings.TrimSpace(payload.TargetCity) != "" {
+		if payload.TargetCity != "" {
 			if rt.RegionAttackStats == nil {
 				rt.RegionAttackStats = make(map[string]int)
 			}
@@ -760,7 +786,16 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 	} else {
 		payloadObj = nil
 	}
-	if err := s.store.InsertEvent(rt.ID, seq, cmd.EventType, payloadObj); err != nil {
+	dedupeKey := ""
+	if cmd.EventType == "attack_success" {
+		var tmp struct {
+			DedupeKey string `json:"dedupe_key"`
+		}
+		if json.Unmarshal(cmd.Data, &tmp) == nil {
+			dedupeKey = strings.TrimSpace(tmp.DedupeKey)
+		}
+	}
+	if err := s.store.InsertEvent(rt.ID, seq, cmd.EventType, payloadObj, dedupeKey); err != nil {
 		rt.NextSeq--
 		return nil, err
 	}
