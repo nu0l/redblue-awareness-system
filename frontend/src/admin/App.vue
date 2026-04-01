@@ -242,25 +242,6 @@
                   </el-select>
                 </el-form-item>
 
-                <el-form-item label="攻击来源">
-                  <el-radio-group v-model="attackForm.source_mode" size="small">
-                    <el-radio-button label="city">源节点</el-radio-button>
-                    <el-radio-button label="team">攻击队伍</el-radio-button>
-                  </el-radio-group>
-                </el-form-item>
-
-                <el-form-item v-if="attackForm.source_mode === 'city'" label="源节点">
-                  <el-select v-model="attackForm.source_city" style="width: 100%">
-                    <el-option v-for="c in currentCities" :key="c" :label="c" :value="c" />
-                  </el-select>
-                </el-form-item>
-
-                <el-form-item v-else label="来源队伍">
-                  <el-select v-model="attackForm.source_team_id" style="width: 100%">
-                    <el-option v-for="t in redTeams" :key="t.id" :label="t.name" :value="t.id" />
-                  </el-select>
-                </el-form-item>
-
                 <el-form-item label="目标靶向">
                   <el-select v-model="attackForm.target_city" style="width: 100%">
                     <el-option v-for="c in currentCities" :key="c" :label="c" :value="c" />
@@ -323,7 +304,7 @@
                     style="width: 240px"
                     :loading="isSubmitting"
                     :disabled="!attackReady"
-                    @click="submitCommand('attack_success', attackForm)"
+                    @click="submitAttackLaunch"
                   >
                     发射飞线指令
                   </el-button>
@@ -387,6 +368,45 @@
                   <el-radio-button label="taizhou">泰州市节点</el-radio-button>
                 </el-radio-group>
               </div>
+
+              <div class="mb8" style="font-size: 13px; color: var(--el-text-color-secondary)">
+                大屏四象限模块（左上 / 左下 / 右上 / 右下可随时替换为不同板块）
+              </div>
+              <div class="row-between mb8">
+                <div style="min-width: 72px">左上</div>
+                <el-select v-model="screenModLeftTop" size="small" style="width: 280px" filterable>
+                  <el-option v-for="o in screenModuleOptions" :key="o.value" :label="o.label" :value="o.value" />
+                </el-select>
+              </div>
+              <div class="row-between mb8">
+                <div style="min-width: 72px">左下</div>
+                <el-select v-model="screenModLeftBottom" size="small" style="width: 280px" filterable>
+                  <el-option v-for="o in screenModuleOptions" :key="o.value" :label="o.label" :value="o.value" />
+                </el-select>
+              </div>
+              <div class="row-between mb8">
+                <div style="min-width: 72px">右上</div>
+                <el-select v-model="screenModRightTop" size="small" style="width: 280px" filterable>
+                  <el-option v-for="o in screenModuleOptions" :key="o.value" :label="o.label" :value="o.value" />
+                </el-select>
+              </div>
+              <div class="row-between mb8">
+                <div style="min-width: 72px">右下</div>
+                <el-select v-model="screenModRightBottom" size="small" style="width: 280px" filterable>
+                  <el-option v-for="o in screenModuleOptions" :key="o.value" :label="o.label" :value="o.value" />
+                </el-select>
+              </div>
+              <el-button
+                type="primary"
+                class="w-full"
+                :disabled="!matchId"
+                :loading="isSubmitting"
+                @click="saveScreenModules"
+              >
+                保存模块布局
+              </el-button>
+
+              <div style="height: 14px"></div>
 
               <div class="row-between mb12">
                 <div>大屏隐藏排行榜（制造悬念）</div>
@@ -482,6 +502,11 @@
                 <el-input v-model="screenSupporter" size="small" style="width: 280px" placeholder="例如：某某单位"></el-input>
               </div>
 
+              <div class="row-between mb12">
+                <div>展示主办/支撑</div>
+                <el-switch v-model="screenCreditsVisible" />
+              </div>
+
               <el-button
                 type="primary"
                 class="w-full"
@@ -490,6 +515,17 @@
                 @click="saveScreenCredits"
               >
                 保存主办/支撑
+              </el-button>
+
+              <el-button
+                size="small"
+                class="w-full"
+                :disabled="!matchId"
+                :loading="isSubmitting"
+                style="margin-top: 10px"
+                @click="saveScreenCreditsVisible"
+              >
+                保存展示开关
               </el-button>
 
               <div style="height: 14px"></div>
@@ -1041,6 +1077,13 @@ import * as echarts from "echarts";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { UploadRequestOptions } from "element-plus";
 import type { TeamDTO } from "../shared/types";
+import {
+  DEFAULT_SCREEN_MODULES,
+  SCREEN_MODULE_IDS,
+  SCREEN_MODULE_LABELS,
+  normalizeScreenModules,
+  type ScreenModuleId,
+} from "../shared/screenLayout";
 
 // @ts-expect-error: Vetur may not infer correct TS module settings for import.meta
 const deployMode = String((import.meta as any).env?.VITE_DEPLOY_MODE ?? "proxy").trim().toLowerCase();
@@ -1091,7 +1134,7 @@ const CITIES_CHINA = [
   "重庆",
   "上海",
 ];
-const CITIES_TAIZHOU = ["市区", "海陵区", "高港区", "姜堰区", "兴化市", "靖江市", "泰兴市"];
+const CITIES_TAIZHOU = ["泰州市", "海陵区", "高港区", "姜堰区", "兴化市", "靖江市", "泰兴市"];
 
 // web 漏洞分类：用于 admin 选择 attack_type，并驱动大屏的战术统计/雷达维度
 const attackTypes = ref<string[]>([
@@ -1241,6 +1284,7 @@ const matchId = ref("");
 const screenTitle = ref("");
 const screenOrganizer = ref("");
 const screenSupporter = ref("");
+const screenCreditsVisible = ref(true);
 const countdownEndTS = ref(0);
 const countdownPicker = ref("");
 const countdownBroadcastMsg = ref("");
@@ -1251,6 +1295,14 @@ const bgmEnabled = ref(false);
 const successSfxUrl = ref("");
 const successSfxEnabled = ref(false);
 const leaderboardMainAlpha = ref(0.14);
+const screenModLeftTop = ref<ScreenModuleId>(DEFAULT_SCREEN_MODULES.left_top);
+const screenModLeftBottom = ref<ScreenModuleId>(DEFAULT_SCREEN_MODULES.left_bottom);
+const screenModRightTop = ref<ScreenModuleId>(DEFAULT_SCREEN_MODULES.right_top);
+const screenModRightBottom = ref<ScreenModuleId>(DEFAULT_SCREEN_MODULES.right_bottom);
+const screenModuleOptions = SCREEN_MODULE_IDS.map((id) => ({
+  value: id,
+  label: SCREEN_MODULE_LABELS[id],
+}));
 const bgmPreviewAudioEl = ref<HTMLAudioElement | null>(null);
 const sfxPreviewAudioEl = ref<HTMLAudioElement | null>(null);
 const audioPlaying = reactive({ bgm: false });
@@ -1310,7 +1362,6 @@ const broadcastTemplates = ref([
 ]);
 
 const teams = ref<TeamDTO[]>([]);
-const redTeams = computed(() => teams.value.filter((t) => t.type === "red"));
 const hasBlueTeam = computed(() => teams.value.some((t) => t.type === "blue"));
 const currentAttackMembers = computed(() => {
   const t = teams.value.find((x) => x.id === attackForm.team_id);
@@ -1328,12 +1379,10 @@ const replayFromSeq = ref(1);
 const autoMessage = ref(true);
 
 const attackReady = computed(() => {
-  const hasSource = attackForm.source_mode === "team" ? attackForm.source_team_id > 0 : !!attackForm.source_city;
   return (
     !!matchId.value &&
     teams.value.length > 0 &&
     attackForm.team_id > 0 &&
-    hasSource &&
     !!attackForm.target_city &&
     !!attackForm.attack_type &&
     !!attackForm.message
@@ -1352,9 +1401,6 @@ const manualReady = computed(() => {
 const attackForm = reactive({
   team_id: 0,
   status: "success" as "success" | "defense_success" | "trace_success",
-  source_mode: "city" as "city" | "team",
-  source_city: "北京",
-  source_team_id: 0,
   target_city: "上海",
   target_unit: "",
   attack_type: attackTypes.value[0],
@@ -1393,7 +1439,6 @@ async function fetchTeams() {
   const red = teams.value.find((t) => t.type === "red");
   if (red) {
     attackForm.team_id = red.id;
-    attackForm.source_team_id = red.id;
     attackForm.member = (red.members ?? [])[0] ?? "";
   }
   const anyTeam = teams.value[0];
@@ -1410,6 +1455,7 @@ async function fetchState() {
   screenTitle.value = s.screen_title ?? "实战化红蓝对抗演练指挥中心";
   screenOrganizer.value = s.screen_organizer ?? "";
   screenSupporter.value = s.screen_supporter ?? "";
+  screenCreditsVisible.value = s.screen_credits_visible !== false;
   countdownEndTS.value = Number(s.countdown_end_ts ?? 0);
   countdownPicker.value = countdownEndTS.value > 0 ? new Date(countdownEndTS.value * 1000).toISOString().slice(0, 16) : "";
   countdownBroadcastMsg.value = s.countdown_broadcast_msg ?? "";
@@ -1423,6 +1469,11 @@ async function fetchState() {
     ? Math.max(0, Math.min(1, Number(s.leaderboard_main_alpha)))
     : 0.14;
   leaderboardBgUrl.value = s.leaderboard_bg_url ?? "";
+  const sm = normalizeScreenModules(s.screen_modules);
+  screenModLeftTop.value = sm.left_top;
+  screenModLeftBottom.value = sm.left_bottom;
+  screenModRightTop.value = sm.right_top;
+  screenModRightBottom.value = sm.right_bottom;
 }
 
 function onLeaderboardBgUploadSuccess() {
@@ -1595,12 +1646,9 @@ function genAttackMessage() {
 watch(
   () => [
     attackForm.team_id,
-    attackForm.source_mode,
-    attackForm.source_team_id,
     attackForm.member,
     attackForm.target_unit,
     attackForm.status,
-    attackForm.source_city,
     attackForm.target_city,
     attackForm.attack_type,
   ],
@@ -1616,7 +1664,6 @@ watch(
       return;
     }
     if (!members.includes(attackForm.member)) attackForm.member = members[0];
-    if (attackForm.source_mode === "team") attackForm.source_team_id = attackForm.team_id;
   }
 );
 
@@ -1624,30 +1671,12 @@ watch(mapMode, (mode) => {
   const cities = mode === "china" ? CITIES_CHINA : CITIES_TAIZHOU;
   if (!cities.length) return;
 
-  if (!cities.includes(attackForm.source_city)) {
-    attackForm.source_city = cities[0];
-  }
   if (!cities.includes(attackForm.target_city)) {
     attackForm.target_city = cities[1] ?? cities[0];
   }
 
   genAttackMessage();
 });
-
-watch(
-  () => attackForm.source_mode,
-  (mode) => {
-    if (mode === "team") {
-      if (!redTeams.value.find((t) => t.id === attackForm.source_team_id)) {
-        attackForm.source_team_id = attackForm.team_id || redTeams.value[0]?.id || 0;
-      }
-    } else {
-      const cities = mapMode.value === "china" ? CITIES_CHINA : CITIES_TAIZHOU;
-      if (!cities.includes(attackForm.source_city)) attackForm.source_city = cities[0] ?? "";
-    }
-    genAttackMessage();
-  }
-);
 
 function addAttackType() {
   const name = customAttackTypeInput.value.trim();
@@ -1761,6 +1790,15 @@ async function submitCommand(eventType: string, payload: any) {
   }
 }
 
+/** 飞线起点固定为当前攻击战队（不再支持城市源节点） */
+async function submitAttackLaunch() {
+  await submitCommand("attack_success", {
+    ...attackForm,
+    source_mode: "team",
+    source_team_id: attackForm.team_id,
+  });
+}
+
 async function submitManualScore() {
   if (!requireMatch()) return;
   if (!manualScore.reason.trim()) {
@@ -1811,6 +1849,11 @@ async function saveScreenCredits() {
   await submitCommand("set_screen_credits", { organizer: screenOrganizer.value, supporter: screenSupporter.value });
 }
 
+async function saveScreenCreditsVisible() {
+  await submitCommand("toggle_screen_credits", { visible: screenCreditsVisible.value });
+  await fetchState();
+}
+
 async function saveCountdown() {
   const raw = countdownPicker.value.trim();
   if (!raw) {
@@ -1853,6 +1896,19 @@ async function saveAudioConfig() {
 
 async function saveLeaderboardStyle() {
   await submitCommand("set_leaderboard_style", { main_alpha: Number(leaderboardMainAlpha.value) });
+}
+
+async function saveScreenModules() {
+  if (!matchId.value) return;
+  await submitCommand("set_screen_modules", {
+    modules: {
+      left_top: screenModLeftTop.value,
+      left_bottom: screenModLeftBottom.value,
+      right_top: screenModRightTop.value,
+      right_bottom: screenModRightBottom.value,
+    },
+  });
+  await fetchState();
 }
 
 async function resetCurrentMatch() {
@@ -2476,15 +2532,33 @@ watch(auditScope, () => {
 
 <style scoped>
 .admin-root {
+  --admin-scale: 1;
   min-height: 100vh;
   background:
     radial-gradient(circle at top left, rgba(59, 130, 246, 0.16), transparent 32%),
     radial-gradient(circle at bottom right, rgba(139, 92, 246, 0.16), transparent 34%),
     #edf2ff;
   color: #111827;
+  font-size: calc(14px * var(--admin-scale));
+}
+
+@media (min-width: 1920px) {
+  .admin-root {
+    --admin-scale: 1.08;
+  }
+}
+@media (min-width: 2560px) {
+  .admin-root {
+    --admin-scale: 1.2;
+  }
+}
+@media (min-width: 3200px) {
+  .admin-root {
+    --admin-scale: 1.34;
+  }
 }
 .admin-header {
-  height: 72px;
+  height: calc(72px * var(--admin-scale));
   background: rgba(255, 255, 255, 0.72);
   border-bottom: 1px solid rgba(148, 163, 184, 0.22);
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
@@ -2492,7 +2566,7 @@ watch(auditScope, () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 0 calc(20px * var(--admin-scale));
 }
 .admin-header-left {
   display: flex;
@@ -2554,7 +2628,7 @@ watch(auditScope, () => {
 }
 .admin-body {
   padding: 0;
-  height: calc(100vh - 72px);
+  height: calc(100vh - calc(72px * var(--admin-scale)));
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -2567,11 +2641,11 @@ watch(auditScope, () => {
 }
 
 .admin-sidebar {
-  width: 268px;
-  flex: 0 0 268px;
+  width: calc(268px * var(--admin-scale));
+  flex: 0 0 calc(268px * var(--admin-scale));
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(248, 250, 252, 0.86));
   border-right: 1px solid rgba(148, 163, 184, 0.25);
-  padding: 16px 12px;
+  padding: calc(16px * var(--admin-scale)) calc(12px * var(--admin-scale));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2676,7 +2750,7 @@ watch(auditScope, () => {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 18px 20px 28px;
+  padding: calc(18px * var(--admin-scale)) calc(20px * var(--admin-scale)) calc(28px * var(--admin-scale));
   background: transparent;
 }
 
@@ -2704,8 +2778,8 @@ watch(auditScope, () => {
 .grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: calc(16px * var(--admin-scale));
+  margin-bottom: calc(16px * var(--admin-scale));
 }
 .grid-single {
   grid-template-columns: 1fr;
@@ -2752,7 +2826,7 @@ watch(auditScope, () => {
 }
 .row {
   display: flex;
-  gap: 16px;
+  gap: calc(16px * var(--admin-scale));
 }
 .col {
   flex: 1;

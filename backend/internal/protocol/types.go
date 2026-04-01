@@ -34,7 +34,11 @@ type MatchStateDTO struct {
 	LeaderboardVisible bool              `json:"leaderboard_visible"`
 	Teams              []TeamDTO         `json:"teams"`
 	AttackStats        []AttackStatDTO   `json:"attack_stats"`
+	// RegionAttackStats 按被攻击目标城市/区县聚合（来自 attack_success.target_city）。
+	RegionAttackStats []AttackStatDTO `json:"region_attack_stats"`
 	Panels             map[string]bool   `json:"panels"`
+	// ScreenModules 大屏四槽位模块配置：left_top / left_bottom / right_top / right_bottom -> 模块 id。
+	ScreenModules map[string]string `json:"screen_modules"`
 	CountdownEndTS     int64             `json:"countdown_end_ts"`
 	CountdownBroadcastMsg string        `json:"countdown_broadcast_msg"`
 	CountdownTogglePanelID string       `json:"countdown_toggle_panel_id"`
@@ -43,6 +47,7 @@ type MatchStateDTO struct {
 	ScreenTitle        string            `json:"screen_title"`
 	ScreenOrganizer    string            `json:"screen_organizer"`
 	ScreenSupporter    string            `json:"screen_supporter"`
+	ScreenCreditsVisible bool            `json:"screen_credits_visible"`
 	BGMURL             string            `json:"bgm_url"`
 	BGMEnabled         bool              `json:"bgm_enabled"`
 	SuccessSFXURL      string            `json:"success_sfx_url"`

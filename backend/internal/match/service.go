@@ -29,6 +29,7 @@ type MatchRuntime struct {
 	ScreenTitle       string
 	ScreenOrganizer   string
 	ScreenSupporter   string
+	ScreenCreditsVisible bool
 	LeaderboardBGURL  string
 	BGMURL            string
 	BGMEnabled        bool
@@ -38,6 +39,9 @@ type MatchRuntime struct {
 
 	Teams       []protocol.TeamDTO
 	AttackStats map[string]int // attack_type -> count
+	// RegionAttackStats 被攻击城市/区县 -> 成功事件计数（与 attack_success.target_city 对齐）
+	RegionAttackStats map[string]int
+	ScreenModules     map[string]string
 
 	NextSeq uint64
 }
@@ -198,6 +202,7 @@ func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 		screenTitle,
 		screenOrganizer,
 		screenSupporter,
+		screenCreditsVisible,
 		leaderboardBG,
 		bgmURL,
 		bgmEnabled,
@@ -223,6 +228,7 @@ func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 		return nil, err
 	}
 	attackStats := make(map[string]int)
+	regionStats := make(map[string]int)
 	for _, ev := range evs {
 		if ev.EventType != "attack_success" {
 			continue
@@ -235,6 +241,15 @@ func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 		if at != "" {
 			attackStats[at]++
 		}
+		tc, _ := payload["target_city"].(string)
+		if strings.TrimSpace(tc) != "" {
+			regionStats[tc]++
+		}
+	}
+
+	screenMods, err := s.store.GetScreenModules(matchID)
+	if err != nil {
+		return nil, err
 	}
 
 	rt := &MatchRuntime{
@@ -250,6 +265,7 @@ func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 		ScreenTitle:        screenTitle,
 		ScreenOrganizer:    screenOrganizer,
 		ScreenSupporter:    screenSupporter,
+		ScreenCreditsVisible: screenCreditsVisible,
 		LeaderboardBGURL:   leaderboardBG,
 		BGMURL:             bgmURL,
 		BGMEnabled:         bgmEnabled,
@@ -258,6 +274,8 @@ func (s *Service) LoadRuntime(matchID string) (*MatchRuntime, error) {
 		LeaderboardMainAlpha: leaderboardMainAlpha,
 		Teams:              teams,
 		AttackStats:        attackStats,
+		RegionAttackStats:  regionStats,
+		ScreenModules:      NormalizeScreenModules(screenMods),
 		NextSeq:            lastSeq + 1,
 	}
 	if rt.Panels == nil {
@@ -287,8 +305,8 @@ func (s *Service) GetStateDTO(matchID string) (*protocol.MatchStateDTO, error) {
 	return runtimeToStateDTO(rt), nil
 }
 
-	// GetInitialStateDTO 用于历史复盘：从 match 创建时的“初始配置 + 初始比分”开始，
-	// 再按事件序列回放，从而保证 scoreboard 可复现。
+// GetInitialStateDTO 用于历史复盘：从 match 创建时的“初始配置 + 初始比分”开始，
+// 再按事件序列回放，从而保证 scoreboard 可复现。
 func (s *Service) GetInitialStateDTO(matchID string) (*protocol.MatchStateDTO, error) {
 	initMapType,
 		initLeaderboardVisible,
@@ -301,6 +319,7 @@ func (s *Service) GetInitialStateDTO(matchID string) (*protocol.MatchStateDTO, e
 		screenTitle,
 		initOrganizer,
 		initSupporter,
+		initScreenCreditsVisible,
 		initLeaderboardBG,
 		initBGMURL,
 		initBGMEnabled,
@@ -312,6 +331,11 @@ func (s *Service) GetInitialStateDTO(matchID string) (*protocol.MatchStateDTO, e
 		return nil, err
 	}
 	teams, err := s.store.ListTeams(matchID)
+	if err != nil {
+		return nil, err
+	}
+
+	initScreenMods, err := s.store.GetInitialScreenModules(matchID)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +358,9 @@ func (s *Service) GetInitialStateDTO(matchID string) (*protocol.MatchStateDTO, e
 		LeaderboardVisible: initLeaderboardVisible,
 		Teams:              teams,
 		AttackStats:        []protocol.AttackStatDTO{},
+		RegionAttackStats:  []protocol.AttackStatDTO{},
 		Panels:             initPanels,
+		ScreenModules:      NormalizeScreenModules(initScreenMods),
 		CountdownEndTS:     initCountdownEndTS,
 		CountdownBroadcastMsg:  initCountdownBroadcastMsg,
 		CountdownTogglePanelID: initCountdownTogglePanelID,
@@ -343,6 +369,7 @@ func (s *Service) GetInitialStateDTO(matchID string) (*protocol.MatchStateDTO, e
 		ScreenTitle:        screenTitle,
 		ScreenOrganizer:    initOrganizer,
 		ScreenSupporter:    initSupporter,
+		ScreenCreditsVisible: initScreenCreditsVisible,
 		LeaderboardBGURL:   initLeaderboardBG,
 		BGMURL:             initBGMURL,
 		BGMEnabled:         initBGMEnabled,
@@ -353,31 +380,19 @@ func (s *Service) GetInitialStateDTO(matchID string) (*protocol.MatchStateDTO, e
 }
 
 func runtimeToStateDTO(rt *MatchRuntime) *protocol.MatchStateDTO {
-	attackStats := make([]protocol.AttackStatDTO, 0, len(rt.AttackStats))
-	for name, val := range rt.AttackStats {
-		attackStats = append(attackStats, protocol.AttackStatDTO{Name: name, Value: val})
-	}
-	// 让前端展示更稳定
-	// （这里避免依赖前端排序逻辑）
-	for i := 0; i < len(attackStats); i++ {
-		for j := i + 1; j < len(attackStats); j++ {
-			if attackStats[j].Value > attackStats[i].Value {
-				attackStats[i], attackStats[j] = attackStats[j], attackStats[i]
-			}
-		}
-	}
+	attackStats := statsMapToSortedDTO(rt.AttackStats)
+	regionStats := statsMapToSortedDTO(rt.RegionAttackStats)
 
-	panels := make(map[string]bool, len(rt.Panels))
-	for k, v := range rt.Panels {
-		panels[k] = v
-	}
+	panels := mergePanelsForDTO(rt)
 
 	return &protocol.MatchStateDTO{
 		MapType:            rt.MapType,
 		LeaderboardVisible: rt.LeaderboardVisible,
 		Teams:              rt.Teams,
 		AttackStats:        attackStats,
+		RegionAttackStats:   regionStats,
 		Panels:             panels,
+		ScreenModules:       NormalizeScreenModules(rt.ScreenModules),
 		CountdownEndTS:     rt.CountdownEndTS,
 		CountdownBroadcastMsg:  rt.CountdownBroadcastMsg,
 		CountdownTogglePanelID: rt.CountdownTogglePanelID,
@@ -386,6 +401,7 @@ func runtimeToStateDTO(rt *MatchRuntime) *protocol.MatchStateDTO {
 		ScreenTitle:        rt.ScreenTitle,
 		ScreenOrganizer:    rt.ScreenOrganizer,
 		ScreenSupporter:    rt.ScreenSupporter,
+		ScreenCreditsVisible: rt.ScreenCreditsVisible,
 		LeaderboardBGURL:   rt.LeaderboardBGURL,
 		BGMURL:             rt.BGMURL,
 		BGMEnabled:         rt.BGMEnabled,
@@ -471,6 +487,12 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 		if payload.AttackType != "" {
 			rt.AttackStats[payload.AttackType]++
 		}
+		if strings.TrimSpace(payload.TargetCity) != "" {
+			if rt.RegionAttackStats == nil {
+				rt.RegionAttackStats = make(map[string]int)
+			}
+			rt.RegionAttackStats[payload.TargetCity]++
+		}
 
 	case "manual_score":
 		var payload struct {
@@ -549,6 +571,20 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 		rt.ScreenOrganizer = payload.Organizer
 		rt.ScreenSupporter = payload.Supporter
 		if err := s.store.UpdateMatchScreenCredits(rt.ID, payload.Organizer, payload.Supporter); err != nil {
+			rt.NextSeq--
+			return nil, err
+		}
+
+	case "toggle_screen_credits":
+		var payload struct {
+			Visible bool `json:"visible"`
+		}
+		if err := json.Unmarshal(cmd.Data, &payload); err != nil {
+			rt.NextSeq--
+			return nil, err
+		}
+		rt.ScreenCreditsVisible = payload.Visible
+		if err := s.store.UpdateMatchScreenCreditsVisible(rt.ID, payload.Visible); err != nil {
 			rt.NextSeq--
 			return nil, err
 		}
@@ -650,8 +686,30 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 		rt.Panels[payload.PanelID] = payload.Visible
 		if payload.PanelID == "panel-leaderboard" {
 			rt.LeaderboardVisible = payload.Visible
+			rt.Panels["panel-slot-left_top"] = payload.Visible
+		}
+		if payload.PanelID == "panel-slot-left_top" {
+			mod := NormalizeScreenModules(rt.ScreenModules)["left_top"]
+			if mod == "" || mod == "leaderboard" {
+				rt.LeaderboardVisible = payload.Visible
+				rt.Panels["panel-leaderboard"] = payload.Visible
+			}
 		}
 		if err := s.storeUpdateMatchConfig(rt); err != nil {
+			rt.NextSeq--
+			return nil, err
+		}
+
+	case "set_screen_modules":
+		var payload struct {
+			Modules map[string]string `json:"modules"`
+		}
+		if err := json.Unmarshal(cmd.Data, &payload); err != nil {
+			rt.NextSeq--
+			return nil, err
+		}
+		rt.ScreenModules = mergeScreenModules(rt.ScreenModules, payload.Modules)
+		if err := s.store.UpdateMatchScreenModules(rt.ID, rt.ScreenModules); err != nil {
 			rt.NextSeq--
 			return nil, err
 		}
@@ -717,6 +775,42 @@ func (s *Service) ApplyCommand(matchID string, cmd CmdMessage) (*protocol.WSMess
 		Data:      cmd.Data,
 		State:     state,
 	}, nil
+}
+
+func statsMapToSortedDTO(m map[string]int) []protocol.AttackStatDTO {
+	if m == nil {
+		return nil
+	}
+	out := make([]protocol.AttackStatDTO, 0, len(m))
+	for name, val := range m {
+		out = append(out, protocol.AttackStatDTO{Name: name, Value: val})
+	}
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].Value > out[i].Value {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+func mergePanelsForDTO(rt *MatchRuntime) map[string]bool {
+	panels := make(map[string]bool, len(rt.Panels)+8)
+	for k, v := range rt.Panels {
+		panels[k] = v
+	}
+	for _, s := range []string{"left_top", "left_bottom", "right_top", "right_bottom"} {
+		key := "panel-slot-" + s
+		if _, ok := panels[key]; !ok {
+			if s == "left_top" {
+				panels[key] = rt.LeaderboardVisible
+			} else {
+				panels[key] = true
+			}
+		}
+	}
+	return panels
 }
 
 func (s *Service) storeUpdateMatchConfig(rt *MatchRuntime) error {

@@ -1,5 +1,5 @@
 <template>
-  <div class="screen-root" :style="screenRootStyle">
+  <div class="screen-root" :style="{ ...screenRootStyle, ...topbarStyle }">
     <div class="crt-overlay"></div>
     
     <header class="topbar">
@@ -46,6 +46,7 @@
         </div>
       </div>
     </header>
+    <div class="topbar-splitter" title="拖拽调整大屏标题高度" @mousedown.prevent="startResizeTopbar"></div>
 
     <div
       v-if="alertVisible"
@@ -66,42 +67,42 @@
       <!-- 左侧面板 -->
       <aside ref="leftPanelEl" class="panel panel-left" :style="useCustomPanelWidths ? leftPanelStyle : undefined">
         <div
-          v-show="state.panels?.['panel-leaderboard'] ?? true"
-          id="panel-leaderboard"
-          class="cyber-panel panel-inner"
+          v-show="slotVisible('left_top')"
+          class="cyber-panel panel-inner screen-slot-left-top"
           :style="leftTopPanelStyle"
         >
-          <h2 class="panel-title">
-            <span class="panel-dot"></span> 战队实时得分榜
+          <h2 class="panel-title" :style="titleStyle('left_top')">
+            <span class="panel-dot"></span> {{ moduleTitle("left_top") }}
           </h2>
-          <div ref="leaderViewportEl" class="leader-list">
-            <div class="leader-track" :class="leaderTrackAnimating ? 'anim' : ''" :style="leaderTrackStyle">
+          <div class="title-splitter" title="拖拽调整标题高度" @mousedown.prevent="(e) => startResizeTitle('left_top', e)"></div>
+          <ScreenLeaderboard
+            v-if="moduleAt('left_top') === 'leaderboard'"
+            :sorted-teams="leaderboardSorted"
+            :score-pulse="scorePulse"
+          />
+          <div
+            v-else-if="moduleAt('left_top') === 'battle_logs'"
+            ref="terminalLeftTopEl"
+            class="terminal-scroll terminal-logs"
+          >
+            <div class="terminal-track" :class="terminalTrackAnimating ? 'anim' : ''" :style="terminalTrackStyle">
               <div
-                v-for="(team, idx) in leaderboardWindow"
-                :key="`${team.id}-${idx}`"
-                class="leader-item"
-                :data-rank="getTeamRank(team.id)"
+                v-for="(line, idx) in terminalWindow"
+                :key="`${terminalStartIndex}-${idx}-lt`"
+                class="log-line"
               >
-                <div class="leader-left">
-                  <span class="leader-rank font-cyber" :data-rank="getTeamRank(team.id)">
-                    #{{ getTeamRank(team.id) }}
-                  </span>
-                  <span class="leader-name" :class="team.type === 'red' ? 'name-red' : 'name-blue'">
-                    {{ team.name }}
-                  </span>
-                </div>
-                <div
-                  class="leader-score font-cyber"
-                  :class="[
-                    team.type === 'red' ? 'score-red' : 'score-blue',
-                    scorePulse[team.id] ? 'score-pulse' : ''
-                  ]"
-                >
-                  {{ team.score.toLocaleString() }}
-                </div>
+                <span :class="logLineClass(line)">{{ line }}</span>
               </div>
             </div>
           </div>
+          <ScreenHtmlPanel
+            v-else-if="isHtmlSlot('left_top')"
+            :variant="moduleAt('left_top')"
+            :attack-stats="state.attack_stats"
+            :region-attack-stats="state.region_attack_stats ?? []"
+            :teams="state.teams"
+          />
+          <div v-else ref="chartElLeftTop" class="chart radar-chart"></div>
         </div>
 
         <div
@@ -110,11 +111,38 @@
           @mousedown.prevent="startResizeLeftVertical"
         ></div>
 
-        <div class="cyber-panel panel-inner radar-panel">
+        <div v-show="slotVisible('left_bottom')" class="cyber-panel panel-inner screen-slot-left-bottom">
           <h2 class="panel-title">
-            <span class="panel-dot"></span> 综合战力评估
+            <span class="panel-dot"></span> {{ moduleTitle("left_bottom") }}
           </h2>
-          <div ref="radarEl" class="chart radar-chart"></div>
+          <ScreenLeaderboard
+            v-if="moduleAt('left_bottom') === 'leaderboard'"
+            :sorted-teams="leaderboardSorted"
+            :score-pulse="scorePulse"
+          />
+          <div
+            v-else-if="moduleAt('left_bottom') === 'battle_logs'"
+            ref="terminalLeftBottomEl"
+            class="terminal-scroll terminal-logs"
+          >
+            <div class="terminal-track" :class="terminalTrackAnimating ? 'anim' : ''" :style="terminalTrackStyle">
+              <div
+                v-for="(line, idx) in terminalWindow"
+                :key="`${terminalStartIndex}-${idx}-lb`"
+                class="log-line"
+              >
+                <span :class="logLineClass(line)">{{ line }}</span>
+              </div>
+            </div>
+          </div>
+          <ScreenHtmlPanel
+            v-else-if="isHtmlSlot('left_bottom')"
+            :variant="moduleAt('left_bottom')"
+            :attack-stats="state.attack_stats"
+            :region-attack-stats="state.region_attack_stats ?? []"
+            :teams="state.teams"
+          />
+          <div v-else ref="chartElLeftBottom" class="chart radar-chart"></div>
         </div>
       </aside>
 
@@ -125,7 +153,7 @@
       ></div>
 
       <!-- 中间地图 -->
-      <section class="map-section cyber-panel" :class="mapImpactActive ? 'map-impact' : ''">
+      <section class="map-section cyber-panel">
         <div class="map-decor map-decor-tl"></div>
         <div class="map-decor map-decor-tr"></div>
         <div class="map-decor map-decor-bl"></div>
@@ -139,8 +167,8 @@
             <input
               v-model.number="fontUserScale"
               type="range"
-              min="0.75"
-              max="1.45"
+              min="0.8"
+              max="2.6"
               step="0.05"
               class="map-settings-range"
             />
@@ -170,12 +198,72 @@
               :disabled="isReplaying"
               @click="setMapMode('taizhou')"
             >
-              泰州市区县态势
+              泰州市态势
             </button>
+          </div>
+          <div class="map-mode-title">队伍起飞</div>
+          <div class="map-mode-switch">
+            <button
+              type="button"
+              class="map-mode-btn"
+              :class="mapTeamDockLayout === 'dock' ? 'active' : ''"
+              :disabled="isReplaying"
+              @click="mapTeamDockLayout = 'dock'"
+            >
+              左侧栏
+            </button>
+            <button
+              type="button"
+              class="map-mode-btn"
+              :class="mapTeamDockLayout === 'map' ? 'active' : ''"
+              :disabled="isReplaying"
+              @click="mapTeamDockLayout = 'map'"
+            >
+              地图锚点
+            </button>
+          </div>
+          <div v-if="mapTeamDockLayout === 'dock'" class="map-settings-row">
+            <span class="map-settings-label">侧栏宽度</span>
+            <input
+              v-model.number="mapTeamDockWidth"
+              type="range"
+              min="120"
+              max="280"
+              step="4"
+              class="map-settings-range"
+            />
+            <span class="map-settings-val">{{ Math.round(mapTeamDockWidth) }}px</span>
           </div>
         </div>
 
-        <div ref="mapEl" class="chart map-chart"></div>
+        <div class="map-section-inner">
+          <div class="map-frame" :class="mapImpactActive ? 'map-impact' : ''">
+            <div class="map-body">
+              <div
+                v-show="mapTeamDockLayout === 'dock'"
+                ref="mapTeamDockEl"
+                class="map-team-dock"
+                :style="{ width: `${mapTeamDockWidth}px`, flex: `0 0 ${mapTeamDockWidth}px` }"
+              >
+                <div v-if="!teamDockSorted.length" class="map-team-dock-empty">暂无队伍</div>
+                <div v-else class="map-team-dock-rows" :style="teamDockGridStyle">
+                  <div
+                    v-for="t in teamDockSorted"
+                    :key="t.id"
+                    class="map-team-dock-row"
+                    :data-team-id="t.id"
+                    :style="{ '--team-line': teamLineColorById(t.id) }"
+                  >
+                    <span class="dock-team-name">{{ t.name }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="map-chart-shell">
+                <div ref="mapEl" class="chart map-chart"></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <div
@@ -186,21 +274,39 @@
 
       <!-- 右侧面板 -->
       <aside ref="rightPanelEl" class="panel panel-right" :style="useCustomPanelWidths ? rightPanelStyle : undefined">
-        <div class="cyber-panel panel-inner panel-logs" :style="rightTopPanelStyle">
-          <h2 class="panel-title">
-            <span class="panel-dot"></span> 实时战况日志
+        <div v-show="slotVisible('right_top')" class="cyber-panel panel-inner screen-slot-right-top" :style="rightTopPanelStyle">
+          <h2 class="panel-title" :style="titleStyle('right_top')">
+            <span class="panel-dot"></span> {{ moduleTitle("right_top") }}
           </h2>
-          <div ref="terminalScrollEl" class="terminal-scroll terminal-logs">
+          <div class="title-splitter" title="拖拽调整标题高度" @mousedown.prevent="(e) => startResizeTitle('right_top', e)"></div>
+          <ScreenLeaderboard
+            v-if="moduleAt('right_top') === 'leaderboard'"
+            :sorted-teams="leaderboardSorted"
+            :score-pulse="scorePulse"
+          />
+          <div
+            v-else-if="moduleAt('right_top') === 'battle_logs'"
+            ref="terminalScrollEl"
+            class="terminal-scroll terminal-logs"
+          >
             <div class="terminal-track" :class="terminalTrackAnimating ? 'anim' : ''" :style="terminalTrackStyle">
               <div
                 v-for="(line, idx) in terminalWindow"
-                :key="`${terminalStartIndex}-${idx}`"
+                :key="`${terminalStartIndex}-${idx}-rt`"
                 class="log-line"
               >
                 <span :class="logLineClass(line)">{{ line }}</span>
               </div>
             </div>
           </div>
+          <ScreenHtmlPanel
+            v-else-if="isHtmlSlot('right_top')"
+            :variant="moduleAt('right_top')"
+            :attack-stats="state.attack_stats"
+            :region-attack-stats="state.region_attack_stats ?? []"
+            :teams="state.teams"
+          />
+          <div v-else ref="chartElRightTop" class="chart radar-chart"></div>
         </div>
 
         <div
@@ -209,16 +315,43 @@
           @mousedown.prevent="startResizeRightVertical"
         ></div>
 
-        <div class="cyber-panel panel-inner panel-pie">
+        <div v-show="slotVisible('right_bottom')" class="cyber-panel panel-inner screen-slot-right-bottom">
           <h2 class="panel-title">
-            <span class="panel-dot"></span> 高频战术统计
+            <span class="panel-dot"></span> {{ moduleTitle("right_bottom") }}
           </h2>
-          <div ref="pieEl" class="chart pie-chart"></div>
+          <ScreenLeaderboard
+            v-if="moduleAt('right_bottom') === 'leaderboard'"
+            :sorted-teams="leaderboardSorted"
+            :score-pulse="scorePulse"
+          />
+          <div
+            v-else-if="moduleAt('right_bottom') === 'battle_logs'"
+            ref="terminalRightBottomEl"
+            class="terminal-scroll terminal-logs"
+          >
+            <div class="terminal-track" :class="terminalTrackAnimating ? 'anim' : ''" :style="terminalTrackStyle">
+              <div
+                v-for="(line, idx) in terminalWindow"
+                :key="`${terminalStartIndex}-${idx}-rb`"
+                class="log-line"
+              >
+                <span :class="logLineClass(line)">{{ line }}</span>
+              </div>
+            </div>
+          </div>
+          <ScreenHtmlPanel
+            v-else-if="isHtmlSlot('right_bottom')"
+            :variant="moduleAt('right_bottom')"
+            :attack-stats="state.attack_stats"
+            :region-attack-stats="state.region_attack_stats ?? []"
+            :teams="state.teams"
+          />
+          <div v-else ref="chartElRightBottom" class="chart pie-chart"></div>
         </div>
       </aside>
     </main>
 
-    <footer class="bottom-credits">
+    <footer v-if="state.screen_credits_visible !== false" class="bottom-credits">
       <div class="credits-line">
         <span class="credits-label">主办方</span>
         <span class="credits-sep">：</span>
@@ -280,7 +413,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import * as echarts from "echarts";
 import type { MatchStateDTO, TeamDTO, WSMessage } from "../shared/types";
+import {
+  DEFAULT_SCREEN_MODULES,
+  SCREEN_MODULE_LABELS,
+  SCREEN_SLOTS,
+  isHtmlPanelModule,
+  mergeScreenModulesPatch,
+  normalizeScreenModules,
+  type ScreenModuleId,
+  type ScreenSlotId,
+} from "../shared/screenLayout";
 import { connectMatchWS } from "../shared/wsClient";
+import ScreenHtmlPanel from "./ScreenHtmlPanel.vue";
+import ScreenLeaderboard from "./ScreenLeaderboard.vue";
 
 // 这里保留与旧版一致的点位字典（后续可改为后台下发 GeoJSON/点位配置）。
 const CITIES: Record<string, [number, number]> = {
@@ -318,7 +463,9 @@ const CITIES: Record<string, [number, number]> = {
 };
 
 const TAIZHOU_CITIES: Record<string, [number, number]> = {
-  市区: [120.0, 32.45],
+  泰州市: [120.0, 32.45],
+  市区: [120.0, 32.45], // 兼容旧数据/旧事件
+  市区范围: [120.0, 32.45], // 兼容别名
   海陵区: [119.919, 32.493],
   高港区: [119.88, 32.318],
   姜堰区: [120.146, 32.508],
@@ -368,14 +515,31 @@ const LS_RIGHT_W = "rb_screen_right_px";
 const LS_CUSTOM_LAYOUT = "rb_screen_layout_custom";
 const LS_LEFT_TOP_RATIO = "rb_screen_left_top_ratio";
 const LS_RIGHT_TOP_RATIO = "rb_screen_right_top_ratio";
+const LS_MAP_TEAM_DOCK_LAYOUT = "rb_map_team_dock_layout";
+const LS_MAP_TEAM_DOCK_WIDTH = "rb_map_team_dock_width";
+const LS_TITLE_H_LEFT_TOP = "rb_screen_title_h_left_top";
+const LS_TITLE_H_RIGHT_TOP = "rb_screen_title_h_right_top";
+const LS_TOPBAR_H = "rb_screen_topbar_h";
 
-const fontUserScale = ref(1);
+const fontUserScale = ref(1.12);
 try {
   const s = localStorage.getItem(LS_FONT_USER);
   if (s) {
     const n = Number.parseFloat(s);
-    if (Number.isFinite(n) && n >= 0.75 && n <= 1.45) fontUserScale.value = n;
+    if (Number.isFinite(n) && n >= 0.8 && n <= 2.6) fontUserScale.value = n;
   }
+} catch {
+  // ignore
+}
+
+/** 队伍飞线起点：左侧固定栏（与地图像素对齐）或地图内虚拟锚点 */
+const mapTeamDockLayout = ref<"dock" | "map">("dock");
+const mapTeamDockWidth = ref(168);
+try {
+  const dl = localStorage.getItem(LS_MAP_TEAM_DOCK_LAYOUT);
+  if (dl === "map" || dl === "dock") mapTeamDockLayout.value = dl;
+  const dw = Number.parseInt(localStorage.getItem(LS_MAP_TEAM_DOCK_WIDTH) ?? "", 10);
+  if (Number.isFinite(dw) && dw >= 120 && dw <= 280) mapTeamDockWidth.value = dw;
 } catch {
   // ignore
 }
@@ -407,6 +571,107 @@ try {
   if (Number.isFinite(rtr) && rtr >= PANEL_TOP_RATIO_MIN && rtr <= PANEL_TOP_RATIO_MAX) rightTopRatio.value = rtr;
 } catch {
   // ignore
+}
+
+const titleHLeftTop = ref(44);
+const titleHRightTop = ref(44);
+const topbarHeightUserPx = ref<number | null>(null);
+try {
+  const a = Number.parseInt(localStorage.getItem(LS_TITLE_H_LEFT_TOP) ?? "", 10);
+  const b = Number.parseInt(localStorage.getItem(LS_TITLE_H_RIGHT_TOP) ?? "", 10);
+  if (Number.isFinite(a) && a >= 28 && a <= 92) titleHLeftTop.value = a;
+  if (Number.isFinite(b) && b >= 28 && b <= 92) titleHRightTop.value = b;
+  const th = Number.parseInt(localStorage.getItem(LS_TOPBAR_H) ?? "", 10);
+  if (Number.isFinite(th) && th >= 64 && th <= 180) topbarHeightUserPx.value = th;
+} catch {
+  // ignore
+}
+
+function titleStyle(kind: "left_top" | "right_top") {
+  const h = kind === "left_top" ? titleHLeftTop.value : titleHRightTop.value;
+  const baseFont = 18 * uiScale.value * fontUserScale.value;
+  const scale = Math.max(0.78, Math.min(1.85, h / 44));
+  const fontPx = Math.max(12, Math.round(baseFont * scale));
+  return {
+    height: `${h}px`,
+    minHeight: `${h}px`,
+    maxHeight: `${h}px`,
+    fontSize: `${fontPx}px`,
+  } as Record<string, string>;
+}
+
+const topbarStyle = computed<Record<string, string>>(() => {
+  const h = topbarHeightUserPx.value ?? topbarHeightPx.value;
+  const base = 28 * uiScale.value * fontUserScale.value;
+  const scale = Math.max(0.78, Math.min(2.2, h / 90));
+  const titlePx = Math.max(16, Math.round(base * scale));
+  return {
+    "--topbar-height": `${h}px`,
+    "--topbar-title-px": `${titlePx}px`,
+  };
+});
+
+let titleDrag:
+  | {
+      kind: "left_top" | "right_top";
+      startY: number;
+      startH: number;
+    }
+  | null = null;
+
+function startResizeTitle(kind: "left_top" | "right_top", ev: MouseEvent) {
+  titleDrag = { kind, startY: ev.clientY, startH: kind === "left_top" ? titleHLeftTop.value : titleHRightTop.value };
+  const onMove = (e: MouseEvent) => {
+    if (!titleDrag || titleDrag.kind !== kind) return;
+    const dy = e.clientY - titleDrag.startY;
+    const nh = Math.max(28, Math.min(92, Math.round(titleDrag.startH + dy)));
+    if (kind === "left_top") titleHLeftTop.value = nh;
+    else titleHRightTop.value = nh;
+  };
+  const onUp = () => {
+    if (titleDrag?.kind !== kind) return;
+    titleDrag = null;
+    try {
+      if (kind === "left_top") localStorage.setItem(LS_TITLE_H_LEFT_TOP, String(titleHLeftTop.value));
+      else if (kind === "right_top") localStorage.setItem(LS_TITLE_H_RIGHT_TOP, String(titleHRightTop.value));
+    } catch {
+      // ignore
+    }
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    void nextTick(() => {
+      mapChart?.resize();
+      resizeAllSlotCharts();
+      updateTeamDockGeoCoords();
+    });
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
+let topbarDrag: { startY: number; startH: number } | null = null;
+function startResizeTopbar(ev: MouseEvent) {
+  const cur = topbarHeightUserPx.value ?? topbarHeightPx.value;
+  topbarDrag = { startY: ev.clientY, startH: cur };
+  const onMove = (e: MouseEvent) => {
+    if (!topbarDrag) return;
+    const dy = e.clientY - topbarDrag.startY;
+    const nh = Math.max(64, Math.min(180, Math.round(topbarDrag.startH + dy)));
+    topbarHeightUserPx.value = nh;
+  };
+  const onUp = () => {
+    if (!topbarDrag) return;
+    topbarDrag = null;
+    try {
+      if (topbarHeightUserPx.value != null) localStorage.setItem(LS_TOPBAR_H, String(topbarHeightUserPx.value));
+    } catch {
+      // ignore
+    }
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
 }
 
 const leftPanelStyle = computed(() => ({
@@ -461,6 +726,9 @@ function resetDefaultLayout() {
     localStorage.removeItem(LS_RIGHT_W);
     localStorage.removeItem(LS_LEFT_TOP_RATIO);
     localStorage.removeItem(LS_RIGHT_TOP_RATIO);
+    localStorage.removeItem(LS_TITLE_H_LEFT_TOP);
+    localStorage.removeItem(LS_TITLE_H_RIGHT_TOP);
+    localStorage.removeItem(LS_TOPBAR_H);
   } catch {
     // ignore
   }
@@ -469,11 +737,14 @@ function resetDefaultLayout() {
   rightPanelWidthPx.value = 380;
   leftTopRatio.value = 40;
   rightTopRatio.value = 40;
+  titleHLeftTop.value = 44;
+  titleHRightTop.value = 44;
+  topbarHeightUserPx.value = null;
   updateViewportAdaptiveVars();
   nextTick(() => {
     mapChart?.resize();
-    radarChart?.resize();
-    pieChart?.resize();
+    resizeAllSlotCharts();
+    updateTeamDockGeoCoords();
   });
 }
 
@@ -494,14 +765,14 @@ function startResizeLeftVertical(ev: MouseEvent) {
     const deltaRatio = (dy / Math.max(1, resizeVDrag.panelHeight)) * 100;
     const next = Math.max(PANEL_TOP_RATIO_MIN, Math.min(PANEL_TOP_RATIO_MAX, resizeVDrag.startTopRatio + deltaRatio));
     leftTopRatio.value = next;
-    radarChart?.resize();
+    resizeAllSlotCharts();
   };
   const onUp = () => {
     resizeVDrag = null;
     persistLayout();
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("mouseup", onUp);
-    radarChart?.resize();
+    resizeAllSlotCharts();
   };
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", onUp);
@@ -524,14 +795,14 @@ function startResizeRightVertical(ev: MouseEvent) {
     const deltaRatio = (dy / Math.max(1, resizeVDrag.panelHeight)) * 100;
     const next = Math.max(PANEL_TOP_RATIO_MIN, Math.min(PANEL_TOP_RATIO_MAX, resizeVDrag.startTopRatio + deltaRatio));
     rightTopRatio.value = next;
-    pieChart?.resize();
+    resizeAllSlotCharts();
   };
   const onUp = () => {
     resizeVDrag = null;
     persistLayout();
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("mouseup", onUp);
-    pieChart?.resize();
+    resizeAllSlotCharts();
   };
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", onUp);
@@ -555,8 +826,7 @@ function startResizeLeft(ev: MouseEvent) {
     nw = Math.max(PANEL_W_MIN, Math.min(PANEL_W_MAX, nw));
     leftPanelWidthPx.value = nw;
     mapChart?.resize();
-    radarChart?.resize();
-    pieChart?.resize();
+    resizeAllSlotCharts();
   };
   const onUp = () => {
     resizeDrag = null;
@@ -564,8 +834,8 @@ function startResizeLeft(ev: MouseEvent) {
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("mouseup", onUp);
     mapChart?.resize();
-    radarChart?.resize();
-    pieChart?.resize();
+    resizeAllSlotCharts();
+    void nextTick(() => updateTeamDockGeoCoords());
   };
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", onUp);
@@ -589,8 +859,7 @@ function startResizeRight(ev: MouseEvent) {
     nw = Math.max(PANEL_W_MIN, Math.min(PANEL_W_MAX, nw));
     rightPanelWidthPx.value = nw;
     mapChart?.resize();
-    radarChart?.resize();
-    pieChart?.resize();
+    resizeAllSlotCharts();
   };
   const onUp = () => {
     resizeDrag = null;
@@ -598,8 +867,8 @@ function startResizeRight(ev: MouseEvent) {
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("mouseup", onUp);
     mapChart?.resize();
-    radarChart?.resize();
-    pieChart?.resize();
+    resizeAllSlotCharts();
+    void nextTick(() => updateTeamDockGeoCoords());
   };
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", onUp);
@@ -612,16 +881,16 @@ watch(fontUserScale, (v) => {
     // ignore
   }
   nextTick(() => {
-    radarChart?.resize();
-    pieChart?.resize();
-    if (pieChart) updatePie(state.attack_stats);
+    resizeAllSlotCharts();
+    refreshSlotChartData();
     if (mapChart) refreshMapSeriesOnly(currentMapType);
+    updateTeamDockGeoCoords();
   });
 });
 
 watch(uiScale, () => {
   nextTick(() => {
-    if (pieChart) updatePie(state.attack_stats);
+    refreshSlotChartData();
   });
 });
 
@@ -684,19 +953,6 @@ let resizeHandler: (() => void) | undefined;
 
 const scorePulse = reactive<Record<number, number>>({});
 
-const leaderTrackStyle = computed(() => {
-  return {
-    transform: `translateY(${-leaderboardShift.value * leaderItemStepPx.value}px)`,
-  };
-});
-
-function getTeamRank(teamId: number | undefined): number {
-  if (!teamId) return 0;
-  const arr = leaderboardSorted.value;
-  const idx = arr.findIndex((t) => t.id === teamId);
-  return idx === -1 ? 0 : idx + 1;
-}
-
 function pulseTeamScore(teamId: number) {
   scorePulse[teamId] = Date.now();
   window.setTimeout(() => {
@@ -753,58 +1009,65 @@ const state = reactive<MatchStateDTO>({
   leaderboard_visible: true,
   teams: [],
   attack_stats: attackStatsDefault,
+  region_attack_stats: [],
   panels: { "panel-leaderboard": true },
+  screen_modules: { ...DEFAULT_SCREEN_MODULES },
 });
 
 const leaderboardSorted = computed(() => {
   return [...state.teams].sort((a, b) => b.score - a.score);
 });
 
-const LEADERBOARD_PAGE_SIZE = 8;
-const leaderboardStartIndex = ref(0);
-const leaderboardShift = ref(0); // 0 or 1, 每次上移 1 条
-const leaderTrackAnimating = ref(false);
-const leaderItemStepPx = ref(56); // 默认估算（会在 mounted 后测量一次）
-const leaderViewportEl = ref<HTMLElement | null>(null);
+/** 左侧队伍栏：按 id 稳定排序，与飞线锚点行一一对应 */
+const teamDockSorted = computed(() => [...state.teams].sort((a, b) => a.id - b.id));
 
-const leaderboardWindow = computed(() => {
-  const arr = leaderboardSorted.value;
-  if (!arr.length) return [];
-
-  const n = arr.length;
-  const visibleCount = Math.min(LEADERBOARD_PAGE_SIZE, n);
-
-  // 不足一屏：不滚动，直接显示全部
-  if (n <= visibleCount) return arr;
-
-  // 滚动需要多渲染 1 条，做无缝上移
-  const start = ((leaderboardStartIndex.value % n) + n) % n;
-  const out: any[] = [];
-  for (let i = 0; i < visibleCount + 1; i++) {
-    out.push(arr[(start + i) % n]);
+/** 侧栏内队伍行均分高度，避免挤在一团；单行时垂直居中 */
+const teamDockGridStyle = computed(() => {
+  const n = teamDockSorted.value.length;
+  if (n <= 0) return {};
+  if (n === 1) {
+    return {
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "center",
+    } as Record<string, string>;
   }
-  return out;
+  return {
+    display: "grid",
+    gridTemplateRows: `repeat(${n}, minmax(0, 1fr))`,
+    gap: "3px",
+    alignContent: "stretch",
+  };
 });
 
-let leaderboardTimer: number | undefined;
-function startLeaderboardLoop() {
-  if (leaderboardTimer) window.clearInterval(leaderboardTimer);
-  leaderboardTimer = window.setInterval(() => {
-    const n = leaderboardSorted.value.length;
-    if (n <= LEADERBOARD_PAGE_SIZE) return;
-    if (leaderTrackAnimating.value) return;
+const normalizedScreenModules = computed(() => normalizeScreenModules(state.screen_modules));
 
-    leaderTrackAnimating.value = true;
-    leaderboardShift.value = 1;
-
-    // 动画完成后：推进起点并瞬间复位位移，形成无缝滚动
-    window.setTimeout(() => {
-      leaderboardStartIndex.value = (leaderboardStartIndex.value + 1) % n;
-      leaderTrackAnimating.value = false;
-      leaderboardShift.value = 0;
-    }, 520);
-  }, 2600);
+function moduleAt(slot: ScreenSlotId): ScreenModuleId {
+  return normalizedScreenModules.value[slot];
 }
+
+function moduleTitle(slot: ScreenSlotId): string {
+  return SCREEN_MODULE_LABELS[moduleAt(slot)];
+}
+
+function slotVisible(slot: ScreenSlotId): boolean {
+  const key = `panel-slot-${slot}`;
+  if (state.panels?.[key] === false) return false;
+  if (slot === "left_top" && state.panels?.["panel-leaderboard"] === false) return false;
+  return true;
+}
+
+function isHtmlSlot(slot: ScreenSlotId): boolean {
+  return isHtmlPanelModule(moduleAt(slot));
+}
+
+const chartElLeftTop = ref<HTMLDivElement | null>(null);
+const chartElLeftBottom = ref<HTMLDivElement | null>(null);
+const chartElRightTop = ref<HTMLDivElement | null>(null);
+const chartElRightBottom = ref<HTMLDivElement | null>(null);
+const terminalLeftTopEl = ref<HTMLElement | null>(null);
+const terminalLeftBottomEl = ref<HTMLElement | null>(null);
+const terminalRightBottomEl = ref<HTMLElement | null>(null);
 
 const redTopTeam = computed(() => {
   const reds = state.teams.filter((t) => t.type === "red");
@@ -1042,12 +1305,13 @@ async function toggleBGMManually() {
 
 // ==== ECharts 实例 ====
 const mapEl = ref<HTMLElement | null>(null);
-const radarEl = ref<HTMLElement | null>(null);
-const pieEl = ref<HTMLElement | null>(null);
+const mapTeamDockEl = ref<HTMLElement | null>(null);
+/** 队伍栏各行与地图左缘对齐后的地理坐标（用于队伍→区县飞线起点） */
+const teamDockGeoCoords = reactive<Record<number, [number, number]>>({});
 
 let mapChart: echarts.ECharts | null = null;
-let radarChart: echarts.ECharts | null = null;
-let pieChart: echarts.ECharts | null = null;
+const slotChartInstances: Partial<Record<ScreenSlotId, echarts.ECharts>> = {};
+let lastSlotLayoutKey = "";
 
 let currentMapType: "china" | "taizhou" = "china";
 type MapLineMeta = {
@@ -1059,6 +1323,13 @@ type MapLineMeta = {
   effectPeriod?: number;
   effectTrail?: number;
   effectSymbolSize?: number;
+  createdAt: number;
+  ttlMs: number;
+};
+type TeamSourceMarker = {
+  coord: [number, number];
+  name: string;
+  teamType: string;
   createdAt: number;
   ttlMs: number;
 };
@@ -1079,10 +1350,19 @@ type MapRegionFlash = {
 let mapLineEntries: MapLineMeta[] = [];
 let mapHitMarkers: MapHitMarker[] = [];
 let mapRegionFlashes: MapRegionFlash[] = [];
+let mapTeamSourceMarkers: TeamSourceMarker[] = [];
 let mapLineRefreshTimer: number | undefined;
 let mapHasGeo = true;
 const mapImpactActive = ref(false);
 let mapImpactTimer: number | undefined;
+let mapGeoRoamRaf: number | undefined;
+function onMapGeoRoamForDock() {
+  if (mapGeoRoamRaf != null) return;
+  mapGeoRoamRaf = window.requestAnimationFrame(() => {
+    mapGeoRoamRaf = undefined;
+    updateTeamDockGeoCoords();
+  });
+}
 
 // 事件驱动的“脉冲点”（用于让飞线起止点更有层次）
 const cityPulse = reactive<Record<string, number>>({});
@@ -1093,6 +1373,7 @@ const MAP_LINE_MAX = 90;
 const MAP_HIT_MARK_TTL_MS = 7600;
 const MAP_HIT_MARK_MAX = 60;
 const MAP_REGION_FLASH_TTL_MS = 1800;
+const MAP_TEAM_SOURCE_TTL_MS = 9000;
 
 function buildActiveMapLines(nowTs: number = Date.now()) {
   mapLineEntries = mapLineEntries.filter((it) => nowTs - it.createdAt <= it.ttlMs);
@@ -1113,6 +1394,21 @@ function buildActiveMapLines(nowTs: number = Date.now()) {
       lineStyle,
     };
   });
+}
+
+function buildTeamSourceMarkers(nowTs: number = Date.now()) {
+  mapTeamSourceMarkers = mapTeamSourceMarkers.filter((it) => nowTs - it.createdAt <= it.ttlMs);
+  return mapTeamSourceMarkers.map((it) => ({
+    name: it.name,
+    value: it.coord,
+    teamType: it.teamType,
+  }));
+}
+
+/** 左侧栏模式下队伍起点由 DOM 表现，不再在 geo 上叠散点 */
+function getTeamSourceScatterData() {
+  if (mapTeamDockLayout.value === "dock") return [];
+  return buildTeamSourceMarkers();
 }
 
 function buildHitMarkerSeriesData(nowTs: number = Date.now()) {
@@ -1179,8 +1475,8 @@ function triggerMapImpact(status: AttackStatus) {
   });
 }
 
-function updateRadar(teams: TeamDTO[]) {
-  if (!radarChart) return;
+function setRadarOption(chart: echarts.ECharts | null, teams: TeamDTO[]) {
+  if (!chart) return;
   const indicators = [
     { name: "漏洞挖掘", max: 100 },
     { name: "内网渗透", max: 100 },
@@ -1270,7 +1566,7 @@ function updateRadar(teams: TeamDTO[]) {
     };
   });
 
-  radarChart.setOption({
+  chart.setOption({
     color: ["#ff2a2a", "#ffc107", "#00f3ff"],
     radar: {
       indicator: indicators,
@@ -1298,8 +1594,13 @@ function pieTextPx(base: number) {
   return Math.max(10, Math.round(base * uiScale.value * fontUserScale.value));
 }
 
-function updatePie(attackStats: { name: string; value: number }[]) {
-  if (!pieChart) return;
+/** 柱状图坐标轴、标签等：投屏时略放大 */
+function barAxisFontPx(base: number) {
+  return Math.max(11, Math.round(base * uiScale.value * fontUserScale.value * 1.08));
+}
+
+function setPieOption(chart: echarts.ECharts | null, attackStats: { name: string; value: number }[]) {
+  if (!chart) return;
   const dataList = attackStats ?? [];
   const g = (echarts as any).graphic;
   const mkGradient = (c1: string, c2: string) =>
@@ -1320,7 +1621,7 @@ function updatePie(attackStats: { name: string; value: number }[]) {
   ];
 
   if (!dataList.length) {
-    pieChart.setOption({
+    chart.setOption({
       backgroundColor: "transparent",
       title: {
         text: "暂无战术数据",
@@ -1386,7 +1687,7 @@ function updatePie(attackStats: { name: string; value: number }[]) {
     };
   });
 
-  pieChart.setOption({
+  chart.setOption({
     backgroundColor: "transparent",
     color: palette.map((p) => p[0]),
     title: {
@@ -1475,6 +1776,362 @@ function updatePie(attackStats: { name: string; value: number }[]) {
   });
 }
 
+function mkHzGradientLR(c1: string, c2: string) {
+  const g = (echarts as any).graphic;
+  return g?.LinearGradient ? new g.LinearGradient(1, 0, 0, 0, [{ offset: 0, color: c1 }, { offset: 1, color: c2 }]) : c1;
+}
+
+function setRegionRankBarOption(chart: echarts.ECharts | null, stats: { name: string; value: number }[]) {
+  if (!chart) return;
+  const list = [...(stats ?? [])].sort((a, b) => b.value - a.value).slice(0, 12);
+  if (!list.length) {
+    chart.setOption({
+      backgroundColor: "transparent",
+      title: {
+        text: "暂无受攻击地域数据",
+        left: "center",
+        top: "center",
+        textStyle: { color: "rgba(148,163,184,0.9)", fontSize: pieTextPx(13) },
+      },
+      xAxis: { show: false },
+      yAxis: { show: false },
+      series: [],
+    });
+    return;
+  }
+  const names = list.map((x) => x.name).reverse();
+  const vals = list.map((x) => x.value).reverse();
+  chart.setOption({
+    backgroundColor: "transparent",
+    grid: { left: 4, right: 44, top: 10, bottom: 10, containLabel: true },
+    xAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: "rgba(0,243,255,0.06)" } },
+      axisLabel: { color: "#94a3b8", fontSize: barAxisFontPx(10) },
+    },
+    yAxis: {
+      type: "category",
+      data: names,
+      axisLabel: { color: "#e2e8f0", fontSize: barAxisFontPx(11) },
+      axisLine: { lineStyle: { color: "rgba(0,243,255,0.2)" } },
+      axisTick: { show: false },
+    },
+    series: [
+      {
+        type: "bar",
+        data: vals,
+        barMaxWidth: 28,
+        barCategoryGap: "20%",
+        itemStyle: {
+          color: mkHzGradientLR("#22d3ee", "#a855f7"),
+          borderRadius: [0, 4, 4, 0],
+        },
+        label: { show: true, position: "right", color: "#94a3b8", fontSize: barAxisFontPx(10), distance: 6 },
+      },
+    ],
+  });
+}
+
+function setTeamScoreBarsOption(chart: echarts.ECharts | null, teams: TeamDTO[]) {
+  if (!chart) return;
+  const list = [...teams].sort((a, b) => b.score - a.score).slice(0, 12);
+  if (!list.length) {
+    chart.setOption({
+      backgroundColor: "transparent",
+      title: {
+        text: "暂无队伍",
+        left: "center",
+        top: "center",
+        textStyle: { color: "rgba(148,163,184,0.9)", fontSize: pieTextPx(13) },
+      },
+      series: [],
+    });
+    return;
+  }
+  const rows = list.map((t) => ({
+    name: t.name,
+    value: t.score,
+    color: t.type === "red" ? mkHzGradientLR("#ff4d4d", "#fb7185") : mkHzGradientLR("#38bdf8", "#22d3ee"),
+  }));
+  const rev = rows.reverse();
+  chart.setOption({
+    backgroundColor: "transparent",
+    grid: { left: 4, right: 12, top: 10, bottom: 10, containLabel: true },
+    xAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: "rgba(0,243,255,0.06)" } },
+      axisLabel: { color: "#94a3b8", fontSize: barAxisFontPx(10) },
+    },
+    yAxis: {
+      type: "category",
+      data: rev.map((r) => r.name),
+      axisLabel: { color: "#e2e8f0", fontSize: barAxisFontPx(11) },
+      axisTick: { show: false },
+    },
+    series: [
+      {
+        type: "bar",
+        data: rev.map((r) => ({ value: r.value, itemStyle: { color: r.color, borderRadius: [0, 4, 4, 0] } })),
+        barMaxWidth: 13,
+        barCategoryGap: "56%",
+      },
+    ],
+  });
+}
+
+function setAttackTypeBarsOption(chart: echarts.ECharts | null, stats: { name: string; value: number }[]) {
+  if (!chart) return;
+  const list = [...(stats ?? [])].sort((a, b) => b.value - a.value).slice(0, 10);
+  if (!list.length) {
+    chart.setOption({
+      backgroundColor: "transparent",
+      title: {
+        text: "暂无战术数据",
+        left: "center",
+        top: "center",
+        textStyle: { color: "rgba(148,163,184,0.9)", fontSize: pieTextPx(13) },
+      },
+      series: [],
+    });
+    return;
+  }
+  const names = list.map((x) => (x.name.length > 8 ? `${x.name.slice(0, 8)}…` : x.name)).reverse();
+  const vals = list.map((x) => x.value).reverse();
+  chart.setOption({
+    backgroundColor: "transparent",
+    grid: { left: 4, right: 10, top: 10, bottom: 10, containLabel: true },
+    xAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: "rgba(0,243,255,0.06)" } },
+      axisLabel: { color: "#94a3b8", fontSize: barAxisFontPx(10) },
+    },
+    yAxis: {
+      type: "category",
+      data: names,
+      axisLabel: { color: "#e2e8f0", fontSize: barAxisFontPx(10) },
+      axisTick: { show: false },
+    },
+    series: [
+      {
+        type: "bar",
+        data: vals,
+        barMaxWidth: 12,
+        barCategoryGap: "58%",
+        itemStyle: { color: mkHzGradientLR("#fbbf24", "#f97316"), borderRadius: [0, 4, 4, 0] },
+      },
+    ],
+  });
+}
+
+function setRedBlueTopCompareOption(chart: echarts.ECharts | null) {
+  if (!chart) return;
+  const red = redTopTeam.value;
+  const blue = blueTopTeam.value;
+  const rScore = red?.score ?? 0;
+  const bScore = blue?.score ?? 0;
+  chart.setOption({
+    backgroundColor: "transparent",
+    grid: { left: 4, right: 12, top: 14, bottom: 14, containLabel: true },
+    xAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: "rgba(0,243,255,0.06)" } },
+      axisLabel: { color: "#94a3b8", fontSize: barAxisFontPx(10) },
+    },
+    yAxis: {
+      type: "category",
+      data: ["蓝方首席", "红方首席"],
+      axisLabel: { color: "#e2e8f0", fontSize: barAxisFontPx(12), fontWeight: 600 },
+      axisTick: { show: false },
+    },
+    series: [
+      {
+        type: "bar",
+        data: [
+          { value: bScore, itemStyle: { color: mkHzGradientLR("#38bdf8", "#0ea5e9"), borderRadius: [0, 4, 4, 0] } },
+          { value: rScore, itemStyle: { color: mkHzGradientLR("#f87171", "#ef4444"), borderRadius: [0, 4, 4, 0] } },
+        ],
+        barMaxWidth: 18,
+        barCategoryGap: "68%",
+        label: { show: true, position: "right", color: "#e2e8f0", fontSize: barAxisFontPx(11), fontWeight: 700 },
+      },
+    ],
+  });
+}
+
+function setPostureGaugeOption(chart: echarts.ECharts | null) {
+  if (!chart) return;
+  const hits = (state.attack_stats ?? []).reduce((s, x) => s + Number(x.value ?? 0), 0);
+  const regions = (state.region_attack_stats ?? []).length;
+  const blended = Math.min(100, Math.round(Math.sqrt(hits + 1) * 6 + regions * 0.8));
+  const levelText = blended >= 80 ? "高压" : blended >= 55 ? "警戒" : blended >= 30 ? "关注" : "平稳";
+  const showLevelText = levelText !== "关注";
+  chart.setOption({
+    backgroundColor: "transparent",
+    title: {
+      text: "综合态势强度",
+      left: "center",
+      top: "1.8%",
+      textStyle: { color: "rgba(236, 252, 255, 0.98)", fontSize: barAxisFontPx(13), fontWeight: 800, textShadowBlur: 10, textShadowColor: "rgba(34,211,238,0.35)" },
+    },
+    series: [
+      {
+        type: "gauge",
+        radius: "84%",
+        center: ["50%", "56%"],
+        min: 0,
+        max: 100,
+        splitNumber: 10,
+        progress: {
+          show: true,
+          width: 14,
+          roundCap: true,
+          itemStyle: {
+            color: (echarts as any).graphic?.LinearGradient
+              ? new (echarts as any).graphic.LinearGradient(0, 0, 1, 0, [
+                  { offset: 0, color: "#22d3ee" },
+                  { offset: 0.55, color: "#a855f7" },
+                  { offset: 1, color: "#f97316" },
+                ])
+              : "#22d3ee",
+            shadowBlur: 14,
+            shadowColor: "rgba(56,189,248,0.45)",
+          },
+        },
+        axisLine: {
+          lineStyle: {
+            width: 14,
+            color: [
+              [0.35, "rgba(8,145,178,0.42)"],
+              [0.65, "rgba(168,85,247,0.42)"],
+              [1, "rgba(234,88,12,0.42)"],
+            ],
+          },
+        },
+        pointer: {
+          show: true,
+          length: "60%",
+          width: 6,
+          itemStyle: { color: "#fef08a", shadowBlur: 12, shadowColor: "rgba(253,230,138,0.6)" },
+        },
+        anchor: {
+          show: true,
+          showAbove: true,
+          size: 10,
+          itemStyle: {
+            color: "#e2e8f0",
+            borderWidth: 3,
+            borderColor: "rgba(34,211,238,0.55)",
+            shadowBlur: 10,
+            shadowColor: "rgba(34,211,238,0.45)",
+          },
+        },
+        axisTick: { distance: -18, length: 7, lineStyle: { color: "rgba(148,163,184,0.5)", width: 1.2 } },
+        splitLine: { distance: -20, length: 14, lineStyle: { color: "rgba(226,232,240,0.42)", width: 1.4 } },
+        axisLabel: { distance: -34, color: "rgba(203,213,225,0.95)", fontSize: barAxisFontPx(9), fontWeight: 700 },
+        detail: {
+          valueAnimation: true,
+          fontSize: barAxisFontPx(24),
+          fontWeight: 900,
+          color: "#f8fafc",
+          offsetCenter: [0, showLevelText ? "22%" : "18%"],
+          formatter: (v: number) => (showLevelText ? `{a|${Math.round(v)}}\n{b|${levelText}}` : `{a|${Math.round(v)}}`),
+          rich: {
+            a: { fontSize: barAxisFontPx(24), fontWeight: 900, color: "#f8fafc" },
+            b: { fontSize: barAxisFontPx(11), fontWeight: 700, color: "rgba(125,211,252,0.95)", lineHeight: 18 },
+          },
+        },
+        data: [{ value: blended, name: "指数" }],
+      },
+    ],
+  });
+}
+
+function disposeSlotChart(slot: ScreenSlotId) {
+  const ch = slotChartInstances[slot];
+  if (ch) {
+    ch.dispose();
+    delete slotChartInstances[slot];
+  }
+}
+
+function getChartElForSlot(slot: ScreenSlotId): HTMLElement | null {
+  switch (slot) {
+    case "left_top":
+      return chartElLeftTop.value;
+    case "left_bottom":
+      return chartElLeftBottom.value;
+    case "right_top":
+      return chartElRightTop.value;
+    case "right_bottom":
+      return chartElRightBottom.value;
+    default:
+      return null;
+  }
+}
+
+function slotNeedsChart(mod: ScreenModuleId): boolean {
+  if (mod === "leaderboard" || mod === "battle_logs") return false;
+  if (isHtmlPanelModule(mod)) return false;
+  return true;
+}
+
+function ensureSlotChartsMounted() {
+  const mods = normalizedScreenModules.value;
+  const key = SCREEN_SLOTS.map((s) => `${s}:${mods[s]}`).join("|");
+  if (key !== lastSlotLayoutKey) {
+    for (const s of SCREEN_SLOTS) disposeSlotChart(s);
+    lastSlotLayoutKey = key;
+  }
+  for (const slot of SCREEN_SLOTS) {
+    const modSlot = mods[slot]!;
+    if (!slotNeedsChart(modSlot)) continue;
+    const el = getChartElForSlot(slot);
+    if (!el) continue;
+    if (!slotChartInstances[slot]) {
+      slotChartInstances[slot] = echarts.init(el);
+    }
+  }
+}
+
+function refreshSlotChartData() {
+  for (const slot of SCREEN_SLOTS) {
+    const ch = slotChartInstances[slot];
+    if (!ch) continue;
+    const mod = normalizedScreenModules.value[slot]!;
+    switch (mod) {
+      case "radar_power":
+        setRadarOption(ch, state.teams);
+        break;
+      case "region_attack_rank":
+        setRegionRankBarOption(ch, state.region_attack_stats ?? []);
+        break;
+      case "attack_type_pie":
+        setPieOption(ch, state.attack_stats);
+        break;
+      case "team_score_bars":
+        setTeamScoreBarsOption(ch, state.teams);
+        break;
+      case "attack_type_bars":
+        setAttackTypeBarsOption(ch, state.attack_stats);
+        break;
+      case "red_blue_top_compare":
+        setRedBlueTopCompareOption(ch);
+        break;
+      case "posture_gauge":
+        setPostureGaugeOption(ch);
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+function resizeAllSlotCharts() {
+  for (const ch of Object.values(slotChartInstances)) {
+    ch?.resize();
+  }
+}
+
 function getCityPulsePoints(mapType: "china" | "taizhou") {
   const currentCities = mapType === "taizhou" ? TAIZHOU_CITIES : CITIES;
   const now = Date.now();
@@ -1485,6 +2142,35 @@ function getCityPulsePoints(mapType: "china" | "taizhou") {
   return entries.map(([k]) => ({ name: k, value: currentCities[k] }));
 }
 
+/** 将左侧队伍栏各行与地图左缘对齐点转为经纬度，供队伍→区县飞线使用 */
+function updateTeamDockGeoCoords() {
+  if (!mapChart || !mapEl.value || !mapHasGeo) return;
+  if (mapTeamDockLayout.value !== "dock" || !mapTeamDockEl.value) return;
+  const mapRect = mapEl.value.getBoundingClientRect();
+  if (mapRect.width < 12 || mapRect.height < 12) return;
+  const rows = mapTeamDockEl.value.querySelectorAll("[data-team-id]");
+  rows.forEach((row) => {
+    const id = Number((row as HTMLElement).dataset.teamId);
+    if (!Number.isFinite(id)) return;
+    const rr = row.getBoundingClientRect();
+    const x = Math.min(32, Math.max(4, mapRect.width * 0.03));
+    const y = rr.top + rr.height / 2 - mapRect.top;
+    if (!Number.isFinite(y) || y < -4 || y > mapRect.height + 4) return;
+    try {
+      const geo = mapChart!.convertFromPixel({ geoIndex: 0 }, [x, y]);
+      if (geo && Array.isArray(geo) && geo.length >= 2) {
+        const lng = Number(geo[0]);
+        const lat = Number(geo[1]);
+        if (Number.isFinite(lng) && Number.isFinite(lat)) {
+          teamDockGeoCoords[id] = [lng, lat];
+        }
+      }
+    } catch {
+      // ignore
+    }
+  });
+}
+
 function renderMap(hasMap = true, mapType: "china" | "taizhou" = currentMapType) {
   if (!mapChart) return;
   mapHasGeo = hasMap;
@@ -1493,6 +2179,7 @@ function renderMap(hasMap = true, mapType: "china" | "taizhou" = currentMapType)
 
   const pulsePoints = getCityPulsePoints(mapType);
   const { successData, defenseData, traceData, sourceSuccessData } = buildHitMarkerSeriesData();
+  const teamSourceData = getTeamSourceScatterData();
   const regions = buildMapFlashRegions();
 
   mapChart.setOption(
@@ -1547,6 +2234,32 @@ function renderMap(hasMap = true, mapType: "china" | "taizhou" = currentMapType)
           }
         : null,
       series: [
+        {
+          type: "effectScatter",
+          coordinateSystem: hasMap ? "geo" : "cartesian2d",
+          zlevel: 4,
+          rippleEffect: { brushType: "stroke", scale: 3.6 },
+          symbol: "circle",
+          symbolSize: 8,
+          label: {
+            show: true,
+            formatter: (p: any) => `队伍:${String(p.name ?? "")}`,
+            position: "right",
+            color: "#e2e8f0",
+            fontSize: pieTextPx(10),
+            backgroundColor: "rgba(2,6,23,0.72)",
+            borderColor: "rgba(56,189,248,0.28)",
+            borderWidth: 1,
+            borderRadius: 4,
+            padding: [2, 5],
+          },
+          itemStyle: {
+            color: (p: any) => (String(p.data?.teamType ?? "") === "red" ? "#fb7185" : "#67e8f9"),
+            shadowBlur: 10,
+            shadowColor: "rgba(255,255,255,0.2)",
+          },
+          data: teamSourceData,
+        },
         {
           type: "effectScatter",
           coordinateSystem: hasMap ? "geo" : "cartesian2d",
@@ -1646,6 +2359,7 @@ function renderMap(hasMap = true, mapType: "china" | "taizhou" = currentMapType)
     },
     true
   );
+  void nextTick(() => updateTeamDockGeoCoords());
 }
 
 function refreshMapSeriesOnly(mapType: "china" | "taizhou") {
@@ -1655,6 +2369,7 @@ function refreshMapSeriesOnly(mapType: "china" | "taizhou") {
   const points = Object.keys(currentCities).map((key) => ({ name: key, value: currentCities[key] }));
   const pulsePoints = getCityPulsePoints(mapType);
   const { successData, defenseData, traceData, sourceSuccessData } = buildHitMarkerSeriesData();
+  const teamSourceData = getTeamSourceScatterData();
   const regions = buildMapFlashRegions();
 
   mapChart.setOption({
@@ -1671,6 +2386,32 @@ function refreshMapSeriesOnly(mapType: "china" | "taizhou") {
             regions: [],
           },
     series: [
+      {
+        type: "effectScatter",
+        coordinateSystem: hasMap ? "geo" : "cartesian2d",
+        zlevel: 4,
+        rippleEffect: { brushType: "stroke", scale: 3.6 },
+        symbol: "circle",
+        symbolSize: 8,
+        label: {
+          show: true,
+          formatter: (p: any) => `队伍:${String(p.name ?? "")}`,
+          position: "right",
+          color: "#e2e8f0",
+          fontSize: pieTextPx(10),
+          backgroundColor: "rgba(2,6,23,0.72)",
+          borderColor: "rgba(56,189,248,0.28)",
+          borderWidth: 1,
+          borderRadius: 4,
+          padding: [2, 5],
+        },
+        itemStyle: {
+          color: (p: any) => (String(p.data?.teamType ?? "") === "red" ? "#fb7185" : "#67e8f9"),
+          shadowBlur: 10,
+          shadowColor: "rgba(255,255,255,0.2)",
+        },
+        data: teamSourceData,
+      },
       {
         type: "effectScatter",
         coordinateSystem: hasMap ? "geo" : "cartesian2d",
@@ -1766,6 +2507,7 @@ function refreshMapSeriesOnly(mapType: "china" | "taizhou") {
       },
     ],
   });
+  void nextTick(() => updateTeamDockGeoCoords());
 }
 
 async function loadMapData(mapType: "china" | "taizhou") {
@@ -1798,53 +2540,125 @@ async function loadMapData(mapType: "china" | "taizhou") {
 }
 
 function updateFromState() {
-  // Map/图表都依赖 state。
   const nextMapType: "china" | "taizhou" = state.map_type === "taizhou" ? "taizhou" : "china";
   if (mapChart && nextMapType !== currentMapType) {
     currentMapType = nextMapType;
     loadMapData(currentMapType);
   }
-  updateRadar(state.teams);
-  updatePie(state.attack_stats);
+  nextTick(() => {
+    ensureSlotChartsMounted();
+    refreshSlotChartData();
+    updateTeamDockGeoCoords();
+  });
 }
 
-const TEAM_COLORS = ["#ff2a2a", "#00f3ff", "#ffc107", "#ff007f", "#22c55e", "#a855f7"];
-function getTeamLineColor(teamId: number | undefined, teamType?: string) {
+const TEAM_COLORS = [
+  "#ff2a2a",
+  "#00f3ff",
+  "#ffc107",
+  "#ff007f",
+  "#22c55e",
+  "#a855f7",
+  "#f97316",
+  "#06b6d4",
+  "#eab308",
+  "#ec4899",
+  "#84cc16",
+  "#8b5cf6",
+];
+
+function teamLineColorById(teamId: number | undefined): string {
   const tid = Number(teamId ?? 0);
-  if (!Number.isFinite(tid) || tid <= 0) return teamType === "red" ? "#ff2a2a" : "#00f3ff";
-  const idx = Math.abs(tid) % TEAM_COLORS.length;
-  return TEAM_COLORS[idx];
+  if (!Number.isFinite(tid) || tid <= 0) return "rgba(148, 163, 184, 0.55)";
+  return TEAM_COLORS[Math.abs(tid) % TEAM_COLORS.length];
 }
 
-function pickTeamSourceCity(teamId: number | undefined, cities: Record<string, [number, number]>) {
-  const cityNames = Object.keys(cities);
-  if (!cityNames.length) return "";
-  const teamsSorted = [...state.teams].sort((a, b) => a.id - b.id);
-  const idx = teamsSorted.findIndex((t) => t.id === Number(teamId ?? 0));
-  if (idx < 0) return cityNames[Math.floor(Math.random() * cityNames.length)];
-  return cityNames[idx % cityNames.length];
+/** 城市/队伍源飞线均按队伍 id 取色，便于多队伍区分 */
+function getTeamLineColor(teamId: number | undefined, teamType?: string, _sourceMode?: "city" | "team") {
+  const tid = Number(teamId ?? 0);
+  const fallback = teamType === "red" ? "#ff2a2a" : "#00f3ff";
+  if (!Number.isFinite(tid) || tid <= 0) return fallback;
+  return teamLineColorById(tid);
 }
+
+function getTeamSourceCoord(teamId: number | undefined, mapType: "china" | "taizhou"): [number, number] {
+  const tid = Number(teamId ?? 0);
+  if (mapTeamDockLayout.value === "dock") {
+    const g = teamDockGeoCoords[tid];
+    if (g) return g;
+  }
+  const teamsSorted = [...state.teams].sort((a, b) => a.id - b.id);
+  const idx = Math.max(0, teamsSorted.findIndex((t) => t.id === tid));
+  if (mapType === "taizhou") {
+    const baseLon = 119.64;
+    const baseLat = 32.80;
+    const step = 0.12;
+    const row = idx % 6;
+    return [baseLon, baseLat - row * step];
+  }
+  const baseLon = 79.5;
+  const baseLat = 44.5;
+  const step = 2.2;
+  const row = idx % 7;
+  return [baseLon, baseLat - row * step];
+}
+
+function getTeamName(teamId: number | undefined): string {
+  const teamsSorted = [...state.teams].sort((a, b) => a.id - b.id);
+  const team = teamsSorted.find((t) => t.id === Number(teamId ?? 0));
+  return team?.name ?? `#${Number(teamId ?? 0) || 0}`;
+}
+
+watch(mapTeamDockLayout, (v) => {
+  try {
+    localStorage.setItem(LS_MAP_TEAM_DOCK_LAYOUT, v);
+  } catch {
+    // ignore
+  }
+  nextTick(() => {
+    mapChart?.resize();
+    updateTeamDockGeoCoords();
+    if (mapChart) refreshMapSeriesOnly(currentMapType);
+  });
+});
+
+watch(mapTeamDockWidth, (v) => {
+  const n = Math.round(v);
+  try {
+    localStorage.setItem(LS_MAP_TEAM_DOCK_WIDTH, String(n));
+  } catch {
+    // ignore
+  }
+  nextTick(() => {
+    mapChart?.resize();
+    updateTeamDockGeoCoords();
+  });
+});
+
+watch(
+  () => state.teams.map((t) => `${t.id}:${t.name}`),
+  () => nextTick(() => updateTeamDockGeoCoords())
+);
 
 function updateMapLineByAttack(data: any) {
   const currentCities = currentMapType === "taizhou" ? TAIZHOU_CITIES : CITIES;
   const cityNames = Object.keys(currentCities);
 
-  const sourceMode = String(data.source_mode ?? "city");
+  const sourceMode = String(data.source_mode ?? "city") === "team" ? "team" : "city";
   let sourceCity = "";
-  if (sourceMode === "team") {
-    sourceCity = pickTeamSourceCity(Number(data.source_team_id ?? data.team_id), currentCities);
-  } else {
+  if (sourceMode === "city") {
     sourceCity =
       data.source_city && currentCities[data.source_city]
         ? data.source_city
         : cityNames[Math.floor(Math.random() * cityNames.length)];
   }
 
-  const lineColor = getTeamLineColor(data.team_id, data.team_type);
+  const teamID = Number(data.source_team_id ?? data.team_id);
+  const lineColor = getTeamLineColor(teamID, data.team_type, sourceMode);
   let lineWidth = 1.8;
   const status = data.status as AttackStatus;
   let lineDash: string | undefined;
-  const sourceCoord = currentCities[sourceCity];
+  const sourceCoord = sourceMode === "team" ? getTeamSourceCoord(teamID, currentMapType) : currentCities[sourceCity];
   const targetCoord = currentCities[data.target_city];
   let drawSource = sourceCoord;
   let drawTarget = targetCoord;
@@ -1883,6 +2697,14 @@ function updateMapLineByAttack(data: any) {
   }
   if (!targetCoord || !sourceCoord || !drawTarget || !drawSource) return;
 
+  // 同区县攻击同区县：起点轻微偏移，避免飞线完全重叠看不见。
+  if (sourceMode === "city" && sourceCity && sourceCity === String(data.target_city ?? "")) {
+    const t = Date.now() / 1000;
+    const ox = Math.cos(t) * 0.26;
+    const oy = Math.sin(t) * 0.18;
+    drawSource = [sourceCoord[0] + ox, sourceCoord[1] + oy];
+  }
+
   if (status === "trace_success") {
     drawSource = targetCoord;
     drawTarget = sourceCoord;
@@ -1901,6 +2723,17 @@ function updateMapLineByAttack(data: any) {
     ttlMs,
   });
   if (mapLineEntries.length > MAP_LINE_MAX) mapLineEntries.shift();
+
+  if (sourceMode === "team" && mapTeamDockLayout.value !== "dock") {
+    mapTeamSourceMarkers.push({
+      coord: sourceCoord,
+      name: getTeamName(teamID),
+      teamType: String(data.team_type ?? ""),
+      createdAt: Date.now(),
+      ttlMs: MAP_TEAM_SOURCE_TTL_MS,
+    });
+    if (mapTeamSourceMarkers.length > 22) mapTeamSourceMarkers.shift();
+  }
 
   if (status === "success" || status === "defense_success" || status === "trace_success") {
     mapHitMarkers.push({
@@ -1976,7 +2809,9 @@ async function loadReplay(fromSeq: number = 1) {
     state.leaderboard_visible = initState.leaderboard_visible;
     state.teams = initState.teams;
     state.attack_stats = initState.attack_stats;
+    state.region_attack_stats = initState.region_attack_stats ?? [];
     state.panels = initState.panels;
+    state.screen_modules = normalizeScreenModules(initState.screen_modules);
 
     currentMapType = state.map_type === "taizhou" ? "taizhou" : "china";
     mapLineEntries = [];
@@ -2010,8 +2845,7 @@ async function loadReplay(fromSeq: number = 1) {
     if (mapChart) {
       await loadMapData(currentMapType);
     }
-    updateRadar(state.teams);
-    updatePie(state.attack_stats);
+    updateFromState();
 
     // 仅对起点之后的“可播放”事件做播放（跳过回放控制命令，避免空步长）
     replayEvents.value = allEvents
@@ -2081,8 +2915,7 @@ async function applyReplayEvent(ev: any, opts: { animate?: boolean } = { animate
       triggerAlert(text, "system");
       pushLog(`[SYSTEM] ${text}`);
     }
-    // state 不变，仅在动画模式下刷新一次
-    if (animate) updateRadar(state.teams);
+    if (animate) refreshSlotChartData();
     return;
   }
 
@@ -2095,11 +2928,17 @@ async function applyReplayEvent(ev: any, opts: { animate?: boolean } = { animate
     if (animate) {
       await loadMapData(currentMapType);
       pushLog(
-        `[SYSTEM] 回放切换地图为 ${mapType === "taizhou" ? "泰州市区县态势" : "全国态势"}`
+        `[SYSTEM] 回放切换地图为 ${mapType === "taizhou" ? "泰州市态势" : "全国态势"}`
       );
-      updateRadar(state.teams);
-      updatePie(state.attack_stats);
+      refreshSlotChartData();
     }
+    return;
+  }
+
+  if (eventType === "set_screen_modules") {
+    const mods = data.modules ?? {};
+    state.screen_modules = mergeScreenModulesPatch(normalizeScreenModules(state.screen_modules), mods);
+    if (animate) pushLog("[SYSTEM] 回放：大屏模块配置已更新");
     return;
   }
 
@@ -2108,7 +2947,17 @@ async function applyReplayEvent(ev: any, opts: { animate?: boolean } = { animate
     const visible = !!data.visible;
     if (panelID) {
       state.panels[panelID] = visible;
-      if (panelID === "panel-leaderboard") state.leaderboard_visible = visible;
+      if (panelID === "panel-leaderboard") {
+        state.leaderboard_visible = visible;
+        state.panels["panel-slot-left_top"] = visible;
+      }
+      if (panelID === "panel-slot-left_top") {
+        const mod = normalizeScreenModules(state.screen_modules).left_top;
+        if (mod === "leaderboard") {
+          state.leaderboard_visible = visible;
+          state.panels["panel-leaderboard"] = visible;
+        }
+      }
       if (animate) pushLog(`[SYSTEM] 回放面板 ${panelID} => ${visible ? "显示" : "隐藏"}`);
     }
     return;
@@ -2125,7 +2974,7 @@ async function applyReplayEvent(ev: any, opts: { animate?: boolean } = { animate
         const message = data.message ?? "";
         if (message) triggerAlert(message, "warn");
         pushLog(`[JUDGE] ${team.name} 计分变化: ${delta}`);
-        updateRadar(state.teams);
+        refreshSlotChartData();
       }
     }
     return;
@@ -2157,6 +3006,15 @@ async function applyReplayEvent(ev: any, opts: { animate?: boolean } = { animate
       else state.attack_stats.push({ name: attackType, value: 1 });
     }
 
+    const targetCity = String(data.target_city ?? "").trim();
+    if (targetCity) {
+      const rs = state.region_attack_stats ?? [];
+      state.region_attack_stats = rs;
+      const rst = rs.find((s) => s.name === targetCity);
+      if (rst) rst.value += 1;
+      else rs.push({ name: targetCity, value: 1 });
+    }
+
     const source = data.source_city ?? "未知源";
     const target = data.target_city ?? "未知目标";
     const status = data.status ?? "attempt";
@@ -2177,8 +3035,7 @@ async function applyReplayEvent(ev: any, opts: { animate?: boolean } = { animate
         team_type: attacker.type,
       });
 
-      updateRadar(state.teams);
-      updatePie(state.attack_stats);
+      refreshSlotChartData();
     }
     return;
   }
@@ -2243,14 +3100,13 @@ onMounted(async () => {
     dateStr.value = `${y}-${m}-${d}`;
   }, 1000);
 
-  // 先启动榜单轮播（若不足一屏会自动不滚动）
-  startLeaderboardLoop();
   startTerminalLoop();
 
   await nextTick();
   // 计算日志可视行数，确保框能更“填满”
   try {
-    const el = terminalScrollEl.value;
+    const el =
+      terminalScrollEl.value || terminalLeftTopEl.value || terminalLeftBottomEl.value || terminalRightBottomEl.value;
     if (el) {
       const lineEl = el.querySelector(".log-line") as HTMLElement | null;
       const lineH = lineEl ? lineEl.getBoundingClientRect().height + 6 : 19; // 额外估算 margin
@@ -2263,23 +3119,10 @@ onMounted(async () => {
   } catch {
     // ignore
   }
-  if (!mapEl.value || !radarEl.value || !pieEl.value) return;
-
-  // 计算榜单单行步进高度（含 margin），用于平滑滚动
-  try {
-    const el = leaderViewportEl.value?.querySelector(".leader-item") as HTMLElement | null;
-    if (el) {
-      const styles = window.getComputedStyle(el);
-      const mb = Number.parseFloat(styles.marginBottom || "0") || 0;
-      leaderItemStepPx.value = el.getBoundingClientRect().height + mb;
-    }
-  } catch {
-    // ignore: fallback to default estimate
-  }
+  if (!mapEl.value) return;
 
   mapChart = echarts.init(mapEl.value);
-  radarChart = echarts.init(radarEl.value);
-  pieChart = echarts.init(pieEl.value);
+  mapChart.on("georoam", onMapGeoRoamForDock);
 
   // 让飞线随时间渐隐，不需要新事件也能保持“持续一段时间”的视觉效果。
   mapLineRefreshTimer = window.setInterval(() => {
@@ -2290,8 +3133,8 @@ onMounted(async () => {
   resizeHandler = () => {
     updateViewportAdaptiveVars();
     mapChart?.resize();
-    radarChart?.resize();
-    pieChart?.resize();
+    resizeAllSlotCharts();
+    void nextTick(() => updateTeamDockGeoCoords());
   };
   window.addEventListener("resize", resizeHandler);
 
@@ -2322,6 +3165,7 @@ onMounted(async () => {
       if (m.type === "sync_state") {
         wsSynced.value = true;
         Object.assign(state, m.state);
+        state.screen_modules = normalizeScreenModules(state.screen_modules);
         syncBGMPlayback();
         currentMapType = state.map_type === "taizhou" ? "taizhou" : "china";
         mapLineEntries = [];
@@ -2341,6 +3185,7 @@ onMounted(async () => {
           m.event !== "attack_success"
         ) {
           Object.assign(state, m.state);
+          state.screen_modules = normalizeScreenModules(state.screen_modules);
           updateFromState();
           return;
         }
@@ -2363,6 +3208,7 @@ onMounted(async () => {
         const prevScores = new Map<number, number>(state.teams.map((t) => [t.id, t.score]));
         // state 由后端全量给前端，避免重复计算产生偏差。
         Object.assign(state, m.state);
+        state.screen_modules = normalizeScreenModules(state.screen_modules);
         syncBGMPlayback();
 
         const data = m.data ?? {};
@@ -2376,6 +3222,8 @@ onMounted(async () => {
           pushLog(`[SYSTEM] 切换地图为 ${data.map_type}`);
         } else if (m.event === "toggle_panel") {
           pushLog(`[SYSTEM] 面板 ${data.panel_id} => ${data.visible ? "显示" : "隐藏"}`);
+        } else if (m.event === "set_screen_modules") {
+          pushLog("[SYSTEM] 已更新大屏四槽位模块配置");
         } else if (m.event === "manual_score") {
           const team = state.teams.find((t) => t.id === data.team_id);
           const delta = data.score_change;
@@ -2433,11 +3281,21 @@ onBeforeUnmount(() => {
   if (clockTimer) window.clearInterval(clockTimer);
   if (alertTimer) window.clearTimeout(alertTimer);
   if (replayTimer) window.clearTimeout(replayTimer);
-  if (leaderboardTimer) window.clearInterval(leaderboardTimer);
+  for (const s of SCREEN_SLOTS) disposeSlotChart(s);
+  lastSlotLayoutKey = "";
   if (terminalLoopTimer) window.clearInterval(terminalLoopTimer);
   if (terminalFlushTimer) window.clearInterval(terminalFlushTimer);
   if (mapLineRefreshTimer) window.clearInterval(mapLineRefreshTimer);
   if (mapImpactTimer) window.clearTimeout(mapImpactTimer);
+  if (mapGeoRoamRaf != null) {
+    window.cancelAnimationFrame(mapGeoRoamRaf);
+    mapGeoRoamRaf = undefined;
+  }
+  if (mapChart) {
+    mapChart.off("georoam", onMapGeoRoamForDock);
+    mapChart.dispose();
+    mapChart = null;
+  }
   if (resizeHandler) window.removeEventListener("resize", resizeHandler);
   bgmAudioEl.value?.pause();
   successSfxAudioEl.value?.pause();
@@ -2535,13 +3393,35 @@ onBeforeUnmount(() => {
 
 .topbar-title {
   margin: 0;
-  font-size: calc(28px * var(--ui-scale) * var(--font-user, 1));
+  font-size: var(--topbar-title-px, calc(28px * var(--ui-scale) * var(--font-user, 1)));
   font-weight: 700;
   letter-spacing: 0.08em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+.topbar-splitter {
+  height: 10px;
+  cursor: row-resize;
+  position: relative;
+  z-index: 11;
+  opacity: 0.7;
+}
+.topbar-splitter::after {
+  content: "";
+  position: absolute;
+  left: 34%;
+  right: 34%;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: rgba(56, 189, 248, 0.28);
+}
+.topbar-splitter:hover::after {
+  background: rgba(56, 189, 248, 0.58);
 }
 .topbar-sub {
   margin-top: calc(6px * var(--ui-scale));
@@ -2709,23 +3589,33 @@ onBeforeUnmount(() => {
   padding: calc(12px * var(--ui-scale));
 }
 
-/* 限制左侧两块面板的高度比例，避免榜单过高把下方雷达挤压 */
-#panel-leaderboard {
+/* 左右栏上下槽位高度比例（与拖拽 leftTopRatio / rightTopRatio 一致） */
+.panel-left .screen-slot-left-top {
   flex: 0 0 40%;
   max-height: 40%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
-.panel-left .radar-panel {
+.panel-left .screen-slot-left-bottom {
   flex: 1 1 60%;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.panel-right .panel-logs {
+.panel-right .screen-slot-right-top {
   flex: 0 0 40%;
   max-height: 40%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
-.panel-right .panel-pie {
+.panel-right .screen-slot-right-bottom {
   flex: 1 1 60%;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .panel-v-splitter {
@@ -2756,21 +3646,50 @@ onBeforeUnmount(() => {
 }
 
 .panel-title {
-  margin: 0 0 12px 0;
-  font-size: calc(16px * var(--ui-scale) * var(--font-user, 1));
+  margin: 0;
+  font-size: calc(18px * var(--ui-scale) * var(--font-user, 1));
   font-weight: 700;
   color: var(--neon-blue);
   display: flex;
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid rgba(0, 243, 255, 0.2);
-  padding-bottom: 10px;
+  box-sizing: border-box;
+  padding: 0 calc(2px * var(--ui-scale));
 }
+.title-splitter {
+  flex: 0 0 auto;
+  height: 10px;
+  position: relative;
+  cursor: row-resize;
+  opacity: 0.7;
+}
+.title-splitter::after {
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: rgba(56, 189, 248, 0.35);
+}
+.title-splitter:hover::after {
+  background: rgba(56, 189, 248, 0.65);
+}
+
 .panel-dot {
   width: calc(10px * var(--ui-scale));
   height: calc(4px * var(--ui-scale));
   background: var(--neon-blue);
   box-shadow: 0 0 8px rgba(0, 243, 255, 0.6);
+}
+
+.panel-inner .chart {
+  flex: 1;
+  min-height: 140px;
+  width: 100%;
 }
 
 .leader-list {
@@ -3074,10 +3993,96 @@ onBeforeUnmount(() => {
   padding: 0;
   overflow: hidden;
   isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
-/* 用 ::after 叠在 canvas 之上，边缘压暗 + 青边光（不拦截拖拽/缩放） */
-.map-section::after {
+.map-section-inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  position: relative;
+}
+
+/* 与地图同一外框：侧栏 + 画布共用压暗与描边 */
+.map-frame {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  position: relative;
+  isolation: isolate;
+}
+
+.map-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.map-team-dock {
+  flex-shrink: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 6px 4px 6px 8px;
+  overflow: hidden;
+  background: rgba(3, 16, 42, 0.42);
+  border-right: 1px solid rgba(120, 240, 255, 0.12);
+}
+
+.map-team-dock-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px * var(--ui-scale) * var(--font-user, 1));
+  color: rgba(148, 163, 184, 0.55);
+  padding: 4px 2px;
+}
+
+.map-team-dock-rows {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.map-team-dock-row {
+  display: flex;
+  align-items: center;
+  min-height: 0;
+  padding: 2px 2px 2px 6px;
+  border-left: 2px solid var(--team-line, rgba(120, 240, 255, 0.22));
+  font-size: calc(11px * var(--ui-scale) * var(--font-user, 1));
+  color: rgba(226, 232, 240, 0.88);
+}
+
+.dock-team-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-chart-shell {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+/* 整块地图框（含左侧队伍条）边缘压暗 + 青边光 */
+.map-frame::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -3091,12 +4096,11 @@ onBeforeUnmount(() => {
   border-radius: 2px;
 }
 
-/* 攻击命中短促冲击：地图轻微震荡 + 暖色闪光 */
-.map-impact {
+.map-frame.map-impact {
   animation: mapImpactShake 560ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
-.map-impact::before {
+.map-frame.map-impact::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -3364,15 +4368,15 @@ onBeforeUnmount(() => {
   ) !important;
 }
 
-/* 2. 终端单行文本：硬核等宽字体与微闪动特效 */
+/* 2. 终端单行文本：投屏加大字号，略减弱闪烁避免眩晕 */
 .log-line {
   font-family: 'Courier New', Courier, 'Roboto Mono', monospace !important;
   font-weight: 600;
-  letter-spacing: 0.5px;
-  line-height: 1.6;
-  margin-bottom: 6px;
-  /* 挂载文字随机闪烁感动画 */
-  animation: text-flicker 5s infinite normal ease-in-out; 
+  font-size: calc(11px * var(--ui-scale) * var(--font-user, 1));
+  letter-spacing: 0.4px;
+  line-height: 1.55;
+  margin-bottom: 8px;
+  animation: text-flicker 6s infinite normal ease-in-out;
 }
 
 /* 3. CRT 文字闪烁关键帧 */
@@ -3430,7 +4434,7 @@ onBeforeUnmount(() => {
 .credits-line {
   flex: 0 1 auto;
   max-width: 100%;
-  font-size: calc(11px * var(--ui-scale) * var(--font-user, 1));
+  font-size: calc(13px * var(--ui-scale) * var(--font-user, 1));
   color: rgba(229, 231, 235, 0.95);
   display: flex;
   gap: 8px;

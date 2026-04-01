@@ -24,7 +24,11 @@ export type MatchStateDTO = {
   leaderboard_visible: boolean;
   teams: TeamDTO[];
   attack_stats: AttackStatDTO[];
+  /** 被攻击目标城市/区县统计（与 attack_success 的 target_city 对应） */
+  region_attack_stats?: AttackStatDTO[];
   panels: Record<string, boolean>;
+  /** 大屏四槽位模块：left_top / left_bottom / right_top / right_bottom */
+  screen_modules?: Record<string, string>;
   countdown_end_ts?: number;
   countdown_broadcast_msg?: string;
   countdown_toggle_panel_id?: string;
@@ -33,6 +37,7 @@ export type MatchStateDTO = {
   screen_title?: string;
   screen_organizer?: string;
   screen_supporter?: string;
+  screen_credits_visible?: boolean;
   bgm_url?: string;
   bgm_enabled?: boolean;
   success_sfx_url?: string;

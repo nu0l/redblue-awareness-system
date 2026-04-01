@@ -56,6 +56,7 @@ func (s *Store) migrate() error {
 			screen_title TEXT NOT NULL DEFAULT '实战化红蓝对抗演练指挥中心',
 			screen_organizer TEXT NOT NULL DEFAULT '',
 			screen_supporter TEXT NOT NULL DEFAULT '',
+			screen_credits_visible INTEGER NOT NULL DEFAULT 1,
 			initial_map_type TEXT,
 			initial_leaderboard_visible INTEGER,
 			initial_panels_json TEXT
@@ -147,6 +148,7 @@ func (s *Store) migrate() error {
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN screen_title TEXT`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN screen_organizer TEXT NOT NULL DEFAULT ''`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN screen_supporter TEXT NOT NULL DEFAULT ''`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN screen_credits_visible INTEGER NOT NULL DEFAULT 1`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN leaderboard_bg_url TEXT NOT NULL DEFAULT ''`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN bgm_url TEXT NOT NULL DEFAULT ''`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN bgm_enabled INTEGER NOT NULL DEFAULT 0`)
@@ -158,6 +160,12 @@ func (s *Store) migrate() error {
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_toggle_panel_id TEXT NOT NULL DEFAULT ''`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_toggle_visible INTEGER NOT NULL DEFAULT 1`)
 	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN countdown_triggered INTEGER NOT NULL DEFAULT 0`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN screen_modules_json TEXT NOT NULL DEFAULT ''`)
+	_ = s.execIgnoreDuplicateColumn(`ALTER TABLE matches ADD COLUMN initial_screen_modules_json TEXT NOT NULL DEFAULT ''`)
+
+	defScreen := `{"left_top":"leaderboard","left_bottom":"region_attack_rank","right_top":"battle_logs","right_bottom":"attack_type_pie"}`
+	_, _ = s.db.Exec(`UPDATE matches SET screen_modules_json = ? WHERE screen_modules_json IS NULL OR TRIM(screen_modules_json) = ''`, defScreen)
+	_, _ = s.db.Exec(`UPDATE matches SET initial_screen_modules_json = screen_modules_json WHERE initial_screen_modules_json IS NULL OR TRIM(initial_screen_modules_json) = ''`)
 
 	// 迁移回填：对于旧数据，如果 initial_* 仍为空，则用当前配置做兜底，避免回放读到空值。
 	_, _ = s.db.Exec(`UPDATE matches SET initial_map_type = map_type WHERE initial_map_type IS NULL`)
@@ -222,13 +230,16 @@ func (s *Store) CreateMatch(
 		screenSupporter = ""
 	}
 
+	defScreenMods := `{"left_top":"leaderboard","left_bottom":"region_attack_rank","right_top":"battle_logs","right_bottom":"attack_type_pie"}`
 	_, err = s.db.Exec(
 		`INSERT INTO matches(
 			id, created_at, map_type, leaderboard_visible, panels_json,
 			screen_title, screen_organizer, screen_supporter,
-			initial_map_type, initial_leaderboard_visible, initial_panels_json
+			screen_credits_visible,
+			initial_map_type, initial_leaderboard_visible, initial_panels_json,
+			screen_modules_json, initial_screen_modules_json
 		) 
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		matchID,
 		time.Now().Unix(),
 		mapType,
@@ -237,10 +248,66 @@ func (s *Store) CreateMatch(
 		screenTitle,
 		screenOrganizer,
 		screenSupporter,
+		1,
 		mapType,
 		leaderboard,
 		string(panelsJSON),
+		defScreenMods,
+		defScreenMods,
 	)
+	return err
+}
+
+func parseScreenModulesJSON(raw string) map[string]string {
+	def := `{"left_top":"leaderboard","left_bottom":"region_attack_rank","right_top":"battle_logs","right_bottom":"attack_type_pie"}`
+	if strings.TrimSpace(raw) == "" {
+		var m map[string]string
+		_ = json.Unmarshal([]byte(def), &m)
+		return m
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
+		_ = json.Unmarshal([]byte(def), &m)
+	}
+	return m
+}
+
+// GetScreenModules 读取当前场次大屏模块配置（JSON 对象）。
+func (s *Store) GetScreenModules(matchID string) (map[string]string, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT COALESCE(screen_modules_json, '') FROM matches WHERE id = ?`, matchID).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	return parseScreenModulesJSON(raw), nil
+}
+
+// GetInitialScreenModules 用于回放基线：优先 initial_screen_modules_json，否则回落到当前 screen_modules。
+func (s *Store) GetInitialScreenModules(matchID string) (map[string]string, error) {
+	var cur, init string
+	err := s.db.QueryRow(
+		`SELECT COALESCE(screen_modules_json, ''), COALESCE(initial_screen_modules_json, '') FROM matches WHERE id = ?`,
+		matchID,
+	).Scan(&cur, &init)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(init) != "" {
+		return parseScreenModulesJSON(init), nil
+	}
+	return parseScreenModulesJSON(cur), nil
+}
+
+// UpdateMatchScreenModules 持久化大屏模块配置（应传入已归一化的完整 map）。
+func (s *Store) UpdateMatchScreenModules(matchID string, modules map[string]string) error {
+	if modules == nil {
+		modules = map[string]string{}
+	}
+	b, err := json.Marshal(modules)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE matches SET screen_modules_json = ? WHERE id = ?`, string(b), matchID)
 	return err
 }
 
@@ -274,7 +341,7 @@ func (s *Store) ListMatches() ([]MatchSummary, error) {
 
 func (s *Store) GetMatchPanels(
 	matchID string,
-) (mapType string, leaderboardVisible bool, panels map[string]bool, countdownEndTS int64, countdownBroadcastMsg string, countdownTogglePanelID string, countdownToggleVisible bool, countdownTriggered bool, screenTitle string, screenOrganizer string, screenSupporter string, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
+) (mapType string, leaderboardVisible bool, panels map[string]bool, countdownEndTS int64, countdownBroadcastMsg string, countdownTogglePanelID string, countdownToggleVisible bool, countdownTriggered bool, screenTitle string, screenOrganizer string, screenSupporter string, screenCreditsVisible bool, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
 	var (
 		mapTypeDB              string
 		leaderboardInt         int
@@ -287,6 +354,7 @@ func (s *Store) GetMatchPanels(
 		screenTitleDB          string
 		screenOrganizerDB      string
 		screenSupporterDB      string
+		screenCreditsVisibleInt int
 		leaderboardBGDB        string
 		bgmURLDB               string
 		bgmEnabledInt          int
@@ -302,6 +370,7 @@ func (s *Store) GetMatchPanels(
 			COALESCE(countdown_toggle_visible, 1),
 			COALESCE(countdown_triggered, 0),
 			screen_title, screen_organizer, screen_supporter,
+			COALESCE(screen_credits_visible, 1),
 			COALESCE(leaderboard_bg_url, ''), COALESCE(bgm_url, ''), COALESCE(bgm_enabled, 0),
 			COALESCE(success_sfx_url, ''), COALESCE(success_sfx_enabled, 0),
 			COALESCE(leaderboard_main_alpha, 0.14)
@@ -319,6 +388,7 @@ func (s *Store) GetMatchPanels(
 		&screenTitleDB,
 		&screenOrganizerDB,
 		&screenSupporterDB,
+		&screenCreditsVisibleInt,
 		&leaderboardBGDB,
 		&bgmURLDB,
 		&bgmEnabledInt,
@@ -327,13 +397,13 @@ func (s *Store) GetMatchPanels(
 		&leaderboardMainAlphaDB,
 	)
 	if err != nil {
-		return "", false, nil, 0, "", "", false, false, "", "", "", "", "", false, "", false, 0.14, err
+		return "", false, nil, 0, "", "", false, false, "", "", "", true, "", "", false, "", false, 0.14, err
 	}
 
 	panels = make(map[string]bool)
 	if panelsJSON != "" {
 		if err := json.Unmarshal([]byte(panelsJSON), &panels); err != nil {
-			return "", false, nil, 0, "", "", false, false, "", "", "", "", "", false, "", false, 0.14, err
+			return "", false, nil, 0, "", "", false, false, "", "", "", true, "", "", false, "", false, 0.14, err
 		}
 	}
 
@@ -348,6 +418,7 @@ func (s *Store) GetMatchPanels(
 		screenTitleDB,
 		screenOrganizerDB,
 		screenSupporterDB,
+		screenCreditsVisibleInt == 1,
 		leaderboardBGDB,
 		bgmURLDB,
 		bgmEnabledInt == 1,
@@ -394,6 +465,15 @@ func (s *Store) UpdateMatchScreenCredits(matchID string, organizer string, suppo
 		supporter,
 		matchID,
 	)
+	return err
+}
+
+func (s *Store) UpdateMatchScreenCreditsVisible(matchID string, visible bool) error {
+	v := 0
+	if visible {
+		v = 1
+	}
+	_, err := s.db.Exec(`UPDATE matches SET screen_credits_visible = ? WHERE id = ?`, v, matchID)
 	return err
 }
 
@@ -514,7 +594,7 @@ func (s *Store) ResetMatch(matchID string) error {
 
 func (s *Store) GetMatchInitialConfig(
 	matchID string,
-) (mapType string, leaderboardVisible bool, panels map[string]bool, countdownEndTS int64, countdownBroadcastMsg string, countdownTogglePanelID string, countdownToggleVisible bool, countdownTriggered bool, screenTitle string, screenOrganizer string, screenSupporter string, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
+) (mapType string, leaderboardVisible bool, panels map[string]bool, countdownEndTS int64, countdownBroadcastMsg string, countdownTogglePanelID string, countdownToggleVisible bool, countdownTriggered bool, screenTitle string, screenOrganizer string, screenSupporter string, screenCreditsVisible bool, leaderboardBGURL string, bgmURL string, bgmEnabled bool, successSFXURL string, successSFXEnabled bool, leaderboardMainAlpha float64, err error) {
 	var (
 		mapTypeDB              string
 		lvInt                  int
@@ -524,6 +604,7 @@ func (s *Store) GetMatchInitialConfig(
 		countdownTogglePanelIDDB  string
 		countdownToggleVisibleInt int
 		countdownTriggeredInt     int
+		screenCreditsVisibleInt   int
 		leaderboardBGDB        string
 		bgmURLDB               string
 		bgmEnabledInt          int
@@ -544,6 +625,7 @@ func (s *Store) GetMatchInitialConfig(
 			COALESCE(screen_title, '实战化红蓝对抗演练指挥中心') as screen_title,
 			COALESCE(screen_organizer, '') as screen_organizer,
 			COALESCE(screen_supporter, '') as screen_supporter,
+			COALESCE(screen_credits_visible, 1) as screen_credits_visible,
 			COALESCE(leaderboard_bg_url, '') as leaderboard_bg_url,
 			COALESCE(bgm_url, '') as bgm_url,
 			COALESCE(bgm_enabled, 0) as bgm_enabled,
@@ -553,15 +635,15 @@ func (s *Store) GetMatchInitialConfig(
 		  FROM matches WHERE id = ?`,
 		matchID,
 	)
-	err = row.Scan(&mapTypeDB, &lvInt, &panelsJSON, &countdownEndTSDB, &countdownBroadcastMsgDB, &countdownTogglePanelIDDB, &countdownToggleVisibleInt, &countdownTriggeredInt, &screenTitle, &screenOrganizer, &screenSupporter, &leaderboardBGDB, &bgmURLDB, &bgmEnabledInt, &successSFXURLDB, &successSFXEnabledInt, &leaderboardMainAlphaDB)
+	err = row.Scan(&mapTypeDB, &lvInt, &panelsJSON, &countdownEndTSDB, &countdownBroadcastMsgDB, &countdownTogglePanelIDDB, &countdownToggleVisibleInt, &countdownTriggeredInt, &screenTitle, &screenOrganizer, &screenSupporter, &screenCreditsVisibleInt, &leaderboardBGDB, &bgmURLDB, &bgmEnabledInt, &successSFXURLDB, &successSFXEnabledInt, &leaderboardMainAlphaDB)
 	if err != nil {
-		return "", false, nil, 0, "", "", false, false, "", "", "", "", "", false, "", false, 0.14, err
+		return "", false, nil, 0, "", "", false, false, "", "", "", true, "", "", false, "", false, 0.14, err
 	}
 
 	panels = make(map[string]bool)
 	if panelsJSON != "" {
 		if err := json.Unmarshal([]byte(panelsJSON), &panels); err != nil {
-			return "", false, nil, 0, "", "", false, false, "", "", "", "", "", false, "", false, 0.14, err
+			return "", false, nil, 0, "", "", false, false, "", "", "", true, "", "", false, "", false, 0.14, err
 		}
 	}
 	return mapTypeDB,
@@ -575,6 +657,7 @@ func (s *Store) GetMatchInitialConfig(
 		screenTitle,
 		screenOrganizer,
 		screenSupporter,
+		screenCreditsVisibleInt == 1,
 		leaderboardBGDB,
 		bgmURLDB,
 		bgmEnabledInt == 1,

@@ -972,7 +972,7 @@ func (s *Server) handleLeaderboardBackgroundUpload(w http.ResponseWriter, r *htt
 		return
 	}
 	beforeState := s.captureMatchStateJSON(matchID)
-	if _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, err := s.store.GetMatchPanels(matchID); err != nil {
+	if _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, err := s.store.GetMatchPanels(matchID); err != nil {
 		http.Error(w, "match not found", http.StatusNotFound)
 		return
 	}
@@ -1030,7 +1030,7 @@ func (s *Server) handleLeaderboardBackgroundUpload(w http.ResponseWriter, r *htt
 
 func (s *Server) handleLeaderboardBackgroundDelete(w http.ResponseWriter, r *http.Request, matchID string, claims *JWTClaims) {
 	beforeState := s.captureMatchStateJSON(matchID)
-	if _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, err := s.store.GetMatchPanels(matchID); err != nil {
+	if _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, err := s.store.GetMatchPanels(matchID); err != nil {
 		http.Error(w, "match not found", http.StatusNotFound)
 		return
 	}
@@ -1070,6 +1070,7 @@ func (s *Server) handleAudioUpload(w http.ResponseWriter, r *http.Request, match
 		screenTitle,
 		screenOrganizer,
 		screenSupporter,
+		_,
 		leaderboardBG,
 		bgmURL,
 		bgmEnabled,
